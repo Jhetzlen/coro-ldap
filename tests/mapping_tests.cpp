@@ -879,25 +879,30 @@ TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")
 	CHECK(ldap::narrow_filter<device>(ldap::filters::attr("cn") == "x").to_string() == "(cn=x)");
 }
 
-TEST_CASE("a typed filter on a value that does not encode is the empty filter", "[mapping][filter]")
+TEST_CASE("a typed filter on a value that does not encode carries the encode error", "[mapping][filter]")
 {
 	using ldap::filters::field;
-	const ldap::filter bad[] = {
-		field<&person::uid>() == "\xFF",
-		field<&person::cn>() >= "a\xC3",
-		field<&person::cn>() <= "\xED\xA0\x80",
-		field<&person::cn>().approx("\x80"),
-		field<&person::state>() == static_cast<status>(9),
+	const std::pair<ldap::filter, std::string_view> bad[] = {
+		{ field<&person::uid>() == "\xFF", "filter uid: not valid UTF-8 (ill-formed sequence at offset 0)" },
+		{ field<&person::cn>() >= "a\xC3", "filter cn: not valid UTF-8 (ill-formed sequence at offset 1)" },
+		{ field<&person::cn>() <= "\xED\xA0\x80", "filter cn: not valid UTF-8 (ill-formed sequence at offset 0)" },
+		{ field<&person::cn>().approx("\x80"), "filter cn: not valid UTF-8 (ill-formed sequence at offset 0)" },
+		{ field<&person::state>() == static_cast<status>(9), "filter x-status: value 9 is not in ldap::enum_names" },
 	};
-	for (const auto &f : bad) {
+	for (const auto &[f, context] : bad) {
 		CHECK(f.empty());
-		// It stays empty through && || !, and does not encode.
-		const auto combined = !(f && (field<&person::uid>() == "jdoe")) || (field<&person::uid>() == "x");
+		const auto why = f.build_error();
+		REQUIRE(why.has_value());
+		CHECK(why->code == ldap::client_errc::encode_error);
+		CHECK(std::string_view(why->context) == context);
+		// It stays empty through && || ! with its error, and encoding fails with it.
+		const auto combined = !((field<&person::uid>() == "jdoe") && f) || (field<&person::uid>() == "x");
 		CHECK(combined.empty());
+		CHECK(combined.build_error() == why);
 		ldap::ber::writer w;
 		const auto r = ldap::encode_filter(w, combined);
 		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().code == ldap::client_errc::invalid_filter);
+		CHECK(r.error() == *why);
 	}
 }
 

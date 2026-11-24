@@ -14,6 +14,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace jhetz::ldap {
@@ -88,7 +89,13 @@ class filter
 	  const filter_limits &limits,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 
+	// An empty filter holding the error it was not built for; && || ! keep it.
+	[[nodiscard]] static auto failed(const ldap::error &why,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> filter;
+
 	[[nodiscard]] auto empty() const noexcept -> bool { return nodes_.empty(); }
+	// The error of failed(), or nullopt.
+	[[nodiscard]] auto build_error() const -> std::optional<ldap::error>;
 	// Precondition: !empty().
 	[[nodiscard]] auto root() const noexcept -> view;
 	// Both 0 when empty. Constant time.
@@ -138,6 +145,7 @@ class filter
 	std::uint32_t root_ = 0;
 	std::size_t depth_ = 0;
 	std::size_t elements_ = 0;
+	std::error_code error_{};// failed(): text_ holds its context
 };
 
 // A node of a filter; valid while the filter is alive and unchanged.

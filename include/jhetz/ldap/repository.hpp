@@ -318,8 +318,10 @@ namespace detail {
 		[[nodiscard]] static auto search_request(const dn &base, filter f, search_scope scope) -> result<search_params>
 		{
 			if (f.empty()) {
+				auto why = f.build_error();
 				return std::unexpected(
-				  with_context(make_error(client_errc::invalid_filter, "filter: empty"), op_context("search", base)));
+				  with_context(why ? std::move(*why) : make_error(client_errc::invalid_filter, "filter: empty"),
+					op_context("search", base)));
 			}
 			return search_params{ .base = base,
 				.scope = scope,

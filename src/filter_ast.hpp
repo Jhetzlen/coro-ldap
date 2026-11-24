@@ -242,10 +242,23 @@ struct filter_access
 
 	// f `op` g, reusing f. An AND (resp. OR) root of either operand is
 	// merged into the result.
+	// The empty result of an operation with an empty operand: the first
+	// failed() operand's error.
+	static auto empty_of(const filter &f, const filter &g, const filter::allocator_type &alloc) -> filter
+	{
+		filter out(alloc);
+		const filter &failed = f.error_ ? f : g;
+		out.error_ = failed.error_;
+		if (failed.error_) {
+			out.text_.assign(failed.text_);
+		}
+		return out;
+	}
+
 	static auto combine(filter f, const filter &g, kind op) -> filter
 	{
 		if (f.empty() || g.empty()) {
-			return filter(f.get_allocator());
+			return empty_of(f, g, f.get_allocator());
 		}
 		if (f.nodes_[f.root_].k != k(op)) {
 			wrap(f, op);
@@ -271,7 +284,7 @@ struct filter_access
 	static auto combine_front(const filter &f, filter g, kind op) -> filter
 	{
 		if (f.empty() || g.empty()) {
-			return filter(g.get_allocator());
+			return empty_of(f, g, g.get_allocator());
 		}
 		if (g.nodes_[g.root_].k != k(op)) {
 			wrap(g, op);

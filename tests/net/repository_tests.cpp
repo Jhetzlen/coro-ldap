@@ -790,8 +790,9 @@ TEST_CASE("repository: a value that does not encode fails before anything is sen
 
 	auto found = m.run(s.search(ldap::filters::field<&person::uid>() == std::string("j\xC3")));
 	REQUIRE_FALSE(found.has_value());
-	CHECK(found.error().code == ldap::client_errc::invalid_filter);
-	CHECK(std::string(found.error().context) == "search ou=people,dc=example,dc=org: filter: empty");
+	CHECK(found.error().code == ldap::client_errc::encode_error);
+	CHECK(std::string(found.error().context)
+		  == "search ou=people,dc=example,dc=org: filter uid: not valid UTF-8 (ill-formed sequence at offset 1)");
 
 	auto got = m.run(s.get("j\xC3"));
 	REQUIRE_FALSE(got.has_value());
@@ -1004,7 +1005,9 @@ TEST_CASE("repository: search_paged decodes the entries of every page", "[net][r
 
 	auto none = m.run(s.search_paged(10, ldap::filters::field<&person::uid>() == std::string("j\xC3")));
 	REQUIRE_FALSE(none.has_value());
-	CHECK(none.error().code == ldap::client_errc::invalid_filter);
+	CHECK(none.error().code == ldap::client_errc::encode_error);
+	CHECK_THAT(std::string(none.error().context),
+	  Catch::Matchers::EndsWith("filter uid: not valid UTF-8 (ill-formed sequence at offset 1)"));
 }
 
 TEST_CASE("repository: schema_check::on_first_use", "[net][repository][schema]")

@@ -155,7 +155,11 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   parentheses (`uid=jdoe`, as ldapsearch does); otherwise no whitespace
   between elements, and `(`, `)`, `*` outside substrings, `\` and NUL must
   be escaped. A default-constructed filter is empty: combining it gives an
-  empty filter, and encoding one fails with `invalid_filter`. A filter
+  empty filter, and encoding one fails with `invalid_filter`.
+  `filter::failed(error)` is an empty filter holding the error it was not
+  built for (`build_error()` returns it, nullopt for any other filter):
+  `&&`, `||` and `!` keep the first such operand's error, and encoding
+  fails with that error instead of `invalid_filter`. A filter
   combined from others uses the left operand's memory resource. An
   attribute given to `filters::attr` that is not a valid description (only
   possible with `attribute::unchecked`), or a bad extensible-match rule,
@@ -1217,8 +1221,10 @@ itself needs only ICU.
   `sys_seconds` a year outside 0000-9999, all as `encode_error`.
   `to_attributes` returns `result<...>` and `change<T>::wire` is a
   `result<modify_change>`; a repository's `modify` and `add` return the
-  error before sending anything, and a typed filter on such a value is the
-  empty filter (fails with `invalid_filter` when sent).
+  error before sending anything, and a typed filter on such a value is
+  `filter::failed()` with that error (context `filter uid: not valid
+  UTF-8 (ill-formed sequence at offset 1)`), which a repository's search
+  and the encoder return before sending.
 
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
   RFC 4512 parser for the subschema's attributeTypes / objectClasses /

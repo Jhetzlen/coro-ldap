@@ -19,19 +19,19 @@ using access = detail::filter_access;
 
 filter::filter(filter &&other) noexcept
   : nodes_(std::move(other.nodes_)), text_(std::move(other.text_)), root_(other.root_), depth_(other.depth_),
-	elements_(other.elements_)
+	elements_(other.elements_), error_(other.error_)
 {
 	other.clear();
 }
 
 filter::filter(const filter &other, const allocator_type &alloc)
   : nodes_(other.nodes_, alloc), text_(other.text_, alloc), root_(other.root_), depth_(other.depth_),
-	elements_(other.elements_)
+	elements_(other.elements_), error_(other.error_)
 {}
 
 filter::filter(filter &&other, const allocator_type &alloc)
   : nodes_(std::move(other.nodes_), alloc), text_(std::move(other.text_), alloc), root_(other.root_),
-	depth_(other.depth_), elements_(other.elements_)
+	depth_(other.depth_), elements_(other.elements_), error_(other.error_)
 {
 	other.clear();
 }
@@ -44,6 +44,7 @@ auto filter::operator=(filter &&other) -> filter &
 		root_ = other.root_;
 		depth_ = other.depth_;
 		elements_ = other.elements_;
+		error_ = other.error_;
 		other.clear();
 	}
 	return *this;
@@ -56,6 +57,23 @@ void filter::clear() noexcept
 	root_ = 0;
 	depth_ = 0;
 	elements_ = 0;
+	error_ = {};
+}
+
+auto filter::failed(const ldap::error &why, std::pmr::memory_resource *mr) -> filter
+{
+	filter f(mr);
+	f.error_ = why.code;
+	f.text_.assign(why.context);
+	return f;
+}
+
+auto filter::build_error() const -> std::optional<ldap::error>
+{
+	if (!error_) {
+		return std::nullopt;
+	}
+	return make_error(error_, text_);
 }
 
 auto filter::view::children() const noexcept -> filter::child_range
@@ -855,6 +873,9 @@ namespace detail {
 	auto check_filter(const filter &f, const filter_limits &limits) -> result<void>
 	{
 		if (f.empty()) {
+			if (auto why = f.build_error()) {
+				return std::unexpected(std::move(*why));
+			}
 			return fail(client_errc::invalid_filter, "filter: empty");
 		}
 		if (f.depth() > limits.max_depth) {

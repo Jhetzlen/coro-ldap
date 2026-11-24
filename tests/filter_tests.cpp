@@ -10,6 +10,7 @@
 #include <chrono>
 #include <concepts>
 #include <iterator>
+#include <memory_resource>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -225,7 +226,34 @@ TEST_CASE("filter builders make one-node trees with unescaped values", "[filter]
 		REQUIRE_FALSE(r);
 		CHECK(r.error().code == client_errc::invalid_filter);
 		CHECK(r.error().context == "filter: empty");
+		CHECK_FALSE(empty.build_error().has_value());
 	}
+}
+
+TEST_CASE("filter::failed keeps its error through the operators", "[filter][builder]")
+{
+	using ldap::filters::attr;
+	const auto why = ldap::make_error(client_errc::encode_error, "value \xC3\xA9: refused");
+	const auto failed = ldap::filter::failed(why);
+	CHECK(failed.empty());
+	CHECK(failed.to_string().empty());
+	CHECK(failed == ldap::filter{});
+	CHECK(failed.build_error() == why);
+	const auto other = ldap::filter::failed(ldap::make_error(client_errc::invalid_filter, "other"));
+	CHECK((attr("a") == "1" && failed).build_error() == why);
+	CHECK((failed || attr("a") == "1").build_error() == why);
+	CHECK((failed && other).build_error() == why);
+	CHECK((ldap::filter{} || failed).build_error() == why);
+	CHECK((!failed).build_error() == why);
+	ldap::filter moved = ldap::filter::failed(why);
+	const ldap::filter to(std::move(moved));
+	CHECK(to.build_error() == why);
+	CHECK_FALSE(moved.build_error().has_value());// NOLINT(bugprone-use-after-move)
+	std::pmr::monotonic_buffer_resource mr;
+	CHECK(ldap::filter(failed, &mr).build_error() == why);
+	auto r = to_ber(failed && attr("a") == "1");
+	REQUIRE_FALSE(r);
+	CHECK(r.error() == why);
 }
 
 TEST_CASE("combining parsed filters cannot change their meaning", "[filter][builder]")

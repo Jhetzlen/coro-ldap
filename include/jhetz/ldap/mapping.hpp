@@ -819,12 +819,13 @@ namespace filters {
 	  private:
 		static auto a() -> attr { return attr(detail::field_of<Ptr>().name); }
 
-		// build(encoded v), or the empty filter when v does not encode.
+		// build(encoded v), or filter::failed() when v does not encode.
 		template<class Build> static auto make(const E &v, Build build) -> filter
 		{
-			const auto s = detail::encode_value(v);
+			auto s = detail::encode_value(v);
 			if (!s) {
-				return {};
+				return filter::failed(detail::with_context(
+				  std::move(s.error()), std::string("filter ").append(detail::field_of<Ptr>().name)));
 			}
 			return build(*s);
 		}

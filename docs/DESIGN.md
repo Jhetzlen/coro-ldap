@@ -1515,11 +1515,13 @@ is sent:
   (context `attribute mail`), and a repository's `add` returns its error prefixed
   with `add <dn>`, again before anything is sent.
 - The typed filter operators (`==`, `>=`, `<=`, `approx`) keep returning
-  `filter`: on an encode failure they return the empty filter, which is
-  already poison (section 2: it stays empty through `&&`, `||` and `!`, and
-  encoding it fails with `invalid_filter` before sending). There is no
-  `result<filter>` overload; the encode error's text is not carried, only
-  the failure.
+  `filter`: on an encode failure they return `filter::failed(error)`, an
+  empty filter, which is already poison (section 2: it stays empty through
+  `&&`, `||` and `!`), holding the encode error (code and context, `filter
+  <attribute>: ...`). The operators keep the first failed operand's error,
+  and encoding the filter or a repository search fails with it before
+  sending. There is no `result<filter>` overload, so composing typed
+  filters stays an expression.
 
 This was a breaking change (coro-ldap-vcp): before it `encode` returned
 `std::string` only, `to_attributes` returned the vector itself, and
