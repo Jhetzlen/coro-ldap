@@ -16,6 +16,7 @@ on:
       - "examples/**"
       - "bench/**"
       - ".github/workflows/windows.yml"
+      - ".github/vcpkg/**"
   pull_request:
     paths:
       - "CMakeLists.txt"
@@ -28,6 +29,7 @@ on:
       - "examples/**"
       - "bench/**"
       - ".github/workflows/windows.yml"
+      - ".github/vcpkg/**"
   workflow_dispatch:
 
 # A newer push to a PR cancels the older run; runs on main all finish, so
@@ -40,10 +42,16 @@ permissions:
   contents: read
 
 env:
-  VCPKG_TRIPLET: x64-windows
-  # vcpkg's binary cache (actions/cache below): ICU and OpenSSL are built
-  # once per vcpkg commit.
-  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.vcpkg-cache,readwrite
+  # .github/vcpkg: the manifest (ICU, OpenSSL, and the vcpkg commit as its
+  # builtin-baseline) and a release-only triplet.
+  VCPKG_MANIFEST: .github\vcpkg
+  VCPKG_TRIPLET: x64-windows-release
+  # vcpkg is cloned at the baseline commit, not the runner image's
+  # (updated weekly, which would change every package's ABI hash).
+  VCPKG_ROOT: ${{ github.workspace }}\.vcpkg
+  VCPKG_INSTALLED: ${{ github.workspace }}\.vcpkg-installed
+  # vcpkg's binary cache, kept with actions/cache below.
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-bincache,readwrite
   # Capy, Corosio and Catch2 are fetched here, outside the build dir, so
   # their sources can be cached.
   FETCHCONTENT_BASE_DIR: ${{ github.workspace }}\.deps
@@ -70,25 +78,32 @@ jobs:
 
       - name: Toolchain versions
         run: |
-          cl 2>&1 | Select-Object -First 1
+          "MSVC tools $env:VCToolsVersion"
           cmake --version
           ninja --version
-          git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD
 
-      - name: vcpkg commit
-        id: vcpkg
-        shell: pwsh
-        run: '"commit=$(git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD)" >> $env:GITHUB_OUTPUT'
+      - name: Clone vcpkg at the manifest's baseline
+        run: |
+          $commit = (Get-Content "$env:VCPKG_MANIFEST\vcpkg.json" | ConvertFrom-Json).'builtin-baseline'
+          git init -q "$env:VCPKG_ROOT"
+          git -C "$env:VCPKG_ROOT" fetch -q --depth 1 https://github.com/microsoft/vcpkg.git $commit
+          git -C "$env:VCPKG_ROOT" checkout -q FETCH_HEAD
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # Restored and saved in separate steps, so a failed build still saves
-      # them.
+      # Restored and saved in separate steps, so a red build or test still
+      # saves them. The key names the manifest and triplet and the MSVC
+      # tools (part of each package's ABI hash); when one of them changed,
+      # an older cache is restored and the new packages are added to it.
       - name: Restore vcpkg's binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v4
         with:
-          path: .vcpkg-cache
-          key: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ steps.vcpkg.outputs.commit }}
-          restore-keys: vcpkg-${{ env.VCPKG_TRIPLET }}-
+          path: vcpkg-bincache
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/vcpkg/**') }}-${{ env.VCToolsVersion }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/vcpkg/**') }}-
+            vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-
 
       - name: Restore the FetchContent sources
         id: deps-cache
@@ -101,24 +116,27 @@ jobs:
 
       - name: Install ICU and OpenSSL
         run: |
-          New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install icu openssl --triplet $env:VCPKG_TRIPLET
+          New-Item -ItemType Directory -Force vcpkg-bincache | Out-Null
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root="$env:VCPKG_MANIFEST" `
+            --overlay-triplets="$env:VCPKG_MANIFEST\triplets" --triplet $env:VCPKG_TRIPLET `
+            --x-install-root="$env:VCPKG_INSTALLED"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Save vcpkg's binary cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.vcpkg-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: .vcpkg-cache
-          key: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ steps.vcpkg.outputs.commit }}
+          path: vcpkg-bincache
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/vcpkg/**') }}-${{ env.VCToolsVersion }}
 
       - name: Configure
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET"
           -DVCPKG_MANIFEST_MODE=OFF
+          -DVCPKG_INSTALLED_DIR="$env:VCPKG_INSTALLED"
           -DFETCHCONTENT_BASE_DIR="$env:FETCHCONTENT_BASE_DIR"
           -DJHETZ_LDAP_BUILD_TESTS=ON
           -DJHETZ_LDAP_BUILD_FUZZERS=OFF
@@ -126,7 +144,7 @@ jobs:
           -DJHETZ_LDAP_WITH_GSSAPI=OFF
 
       - name: Save the FetchContent sources
-        if: steps.deps-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.deps-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -139,5 +157,9 @@ jobs:
         run: cmake --build build -- -k 0
 
       # No slapd, Samba or KDC on Windows: the integration tests are left out.
+      # The ICU and OpenSSL DLLs from PATH: vcpkg's toolchain copies a Debug
+      # build's from debug\bin, which the release-only triplet does not have.
       - name: Test
-        run: ctest --test-dir build --output-on-failure -j4 -LE integration
+        run: |
+          $env:PATH = "$env:VCPKG_INSTALLED\$env:VCPKG_TRIPLET\bin;$env:PATH"
+          ctest --test-dir build --output-on-failure -j4 -LE integration
