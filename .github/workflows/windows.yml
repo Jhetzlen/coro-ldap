@@ -65,7 +65,8 @@ jobs:
       - uses: actions/checkout@v5
 
       # The x64 developer environment (cl, link, ninja, the Windows SDK) for
-      # the steps below.
+      # the steps below, but not its VCPKG_ROOT (Visual Studio's own vcpkg),
+      # which would replace the pinned clone's.
       - name: MSVC environment
         shell: pwsh
         run: |
@@ -73,7 +74,9 @@ jobs:
             -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $vars = cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set"
           foreach ($line in $vars) {
-            if ($line -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" >> $env:GITHUB_ENV }
+            if ($line -match '^([^=]+)=(.*)$' -and $Matches[1] -ne 'VCPKG_ROOT') {
+              "$($Matches[1])=$($Matches[2])" >> $env:GITHUB_ENV
+            }
           }
 
       - name: Toolchain versions
@@ -115,6 +118,7 @@ jobs:
           key: fetchcontent-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
 
       - name: Install ICU and OpenSSL
+        id: install
         run: |
           New-Item -ItemType Directory -Force vcpkg-bincache | Out-Null
           & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root="$env:VCPKG_MANIFEST" `
@@ -122,8 +126,9 @@ jobs:
             --x-install-root="$env:VCPKG_INSTALLED"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Also when the install failed part way: what it built is kept.
       - name: Save vcpkg's binary cache
-        if: ${{ !cancelled() && steps.vcpkg-cache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && (steps.install.outcome == 'success' || steps.install.outcome == 'failure') && steps.vcpkg-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: vcpkg-bincache
@@ -151,7 +156,7 @@ jobs:
           -DJHETZ_LDAP_WITH_GSSAPI=OFF
 
       - name: Save the FetchContent sources
-        if: ${{ !cancelled() && steps.deps-cache.outputs.cache-hit != 'true' }}
+        if: ${{ steps.deps-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
