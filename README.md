@@ -1,6 +1,8 @@
 # coro-ldap
 
 [![ldap](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml/badge.svg)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Jhetzlen/coro-ldap/badges/tests.json)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Jhetzlen/coro-ldap/badges/coverage.json)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
 
 An asynchronous LDAP client library for C++23, built on coroutines over
 [Corosio](https://github.com/cppalliance/corosio) and
