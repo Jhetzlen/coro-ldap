@@ -1335,10 +1335,11 @@ free functions `false` stops it; `connection::search` ignores it, since a
 connection never chases. `connection::compare` still returns `bool`: only
 a chase has more to report.
 
-Paged search (step 6): `ldap::search_paged(connection &, params,
+Paged search (step 6): `ldap::search_paged_stream(connection &, params,
 page_size)` returns a `paged_search` that yields entries across pages,
 requesting the next page with the server's cookie when one ends, until the
-cookie is empty. `search_paged_stream` is a free function, not a connection member (the aw4
+cookie is empty; `ldap::search_paged` returns
+`task<result<search_result>>` with every page collected. `search_paged_stream` is a free function, not a connection member (the aw4
 rule: core types keep only the protocol operations): each page is a
 `connection::search_stream()` (the same task, run on the connection's
 shared state, so that the `paged_search`, like a stream, does not depend
@@ -3398,8 +3399,9 @@ and read through `detail::lease_access`.
   to the I/O thread and wait, as `sync::connection` does; the retry is
   `ldap::client`'s.
   `sync::lease` exposes `sync::connection`'s operations
-  (`detail::connection_api`) on the leased connection. No blocking
-  `search_stream`: `sync::connection` has no blocking stream either.
+  (`detail::connection_api`) on the leased connection. `search_stream`
+  returns a `sync::search_stream` holding one shared lease until
+  destroyed, retried as `client::search_stream` is.
   Lifetime: the destructor closes the `ldap::client` on the I/O thread
   and drops its share of the core. The last owner (the client, or the
   last lease alive) destroys the `ldap::client` there and joins: the

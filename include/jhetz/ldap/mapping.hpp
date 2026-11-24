@@ -792,7 +792,7 @@ template<described T> [[nodiscard]] auto diff(const T &original, const T &change
 namespace filters {
 
 	// Filters on a described member, with values of its type; a value that does
-	// not encode gives the empty filter.
+	// not encode gives filter::failed() with the encode error.
 	template<auto Ptr> class typed_attr
 	{
 		using E = std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::element;

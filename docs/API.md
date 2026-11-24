@@ -1255,7 +1255,9 @@ itself needs only ICU.
   error before sending anything, and a typed filter on such a value is
   `filter::failed()` with that error (context `filter uid: not valid
   UTF-8 (ill-formed sequence at offset 1)`), which a repository's search
-  and the encoder return before sending.
+  and the encoder return before sending. Breaking (coro-ldap-bhe.8): such
+  a search now fails with `encode_error`, not `invalid_filter` (`filter:
+  empty`).
 
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
   RFC 4512 parser for the subschema's attributeTypes / objectClasses /
