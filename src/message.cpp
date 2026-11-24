@@ -604,10 +604,7 @@ auto encode(const message &m, std::pmr::memory_resource *mr) -> result<std::pmr:
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	// Most requests fit; saves the first few doublings of the buffer.
 	w.reserve(256);
-	if (auto done = encode(w, m); !done) {
-		return std::unexpected(std::move(done.error()));
-	}
-	return w.take();
+	return encode(w, m).transform([&w] { return w.take(); });
 }
 
 auto decode(std::span<const std::byte> one_complete_message, const decode_options &options) -> result<message>
@@ -683,11 +680,9 @@ namespace {
 
 auto decode_paged_results(const control &c, std::pmr::memory_resource *mr) -> result<paged_results>
 {
-	auto value = control_value(c, paged_results_oid, "paged results");
-	if (!value) {
-		return std::unexpected(std::move(value.error()));
-	}
-	return in_control(read_paged_results(*value, mr), "paged results");
+	return control_value(c, paged_results_oid, "paged results").and_then([&](std::span<const std::byte> value) {
+		return in_control(read_paged_results(value, mr), "paged results");
+	});
 }
 
 // ---------------------------------------------------------------- server side sorting
@@ -730,11 +725,9 @@ namespace {
 
 auto decode_sort_result(const control &c, std::pmr::memory_resource *mr) -> result<sort_result>
 {
-	auto value = control_value(c, sort_response_oid, "sort result");
-	if (!value) {
-		return std::unexpected(std::move(value.error()));
-	}
-	return in_control(read_sort_result(*value, mr), "sort result");
+	return control_value(c, sort_response_oid, "sort result").and_then([&](std::span<const std::byte> value) {
+		return in_control(read_sort_result(value, mr), "sort result");
+	});
 }
 
 // ---------------------------------------------------------------- virtual list view
@@ -838,11 +831,9 @@ namespace {
 
 auto decode_vlv_response(const control &c, std::pmr::memory_resource *mr) -> result<vlv_response>
 {
-	auto value = control_value(c, vlv_response_oid, "vlv response");
-	if (!value) {
-		return std::unexpected(std::move(value.error()));
-	}
-	return in_control(read_vlv_response(*value, mr), "vlv response");
+	return control_value(c, vlv_response_oid, "vlv response").and_then([&](std::span<const std::byte> value) {
+		return in_control(read_vlv_response(value, mr), "vlv response");
+	});
 }
 
 // ---------------------------------------------------------------- pre-read / post-read
@@ -854,11 +845,9 @@ auto decode_read_entry(const control &c, const decode_options &options) -> resul
 		  detail::sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
 	}
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
-	auto value = control_value(c, c.type, name);
-	if (!value) {
-		return std::unexpected(std::move(value.error()));
-	}
-	return in_control(detail::message_decoder(options).run_entry(*value), name);
+	return control_value(c, c.type, name).and_then([&](std::span<const std::byte> value) {
+		return in_control(detail::message_decoder(options).run_entry(value), name);
+	});
 }
 
 // ---------------------------------------------------------------- transactions (RFC 5805)
