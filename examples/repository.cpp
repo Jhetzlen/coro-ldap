@@ -1,5 +1,5 @@
-#include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/repository.hpp"
+#include "jhetz/ldap/connection.hpp"
 
 #include <boost/corosio/io_context.hpp>
 
