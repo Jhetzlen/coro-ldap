@@ -1,4 +1,4 @@
-// ldap::repository and sync::repository against the scripted mock server
+// ldap::repository, async and over the blocking facades, against the scripted mock server
 // (mock_ldap.hpp) and the threaded one (server_thread.hpp).
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -43,6 +43,12 @@ struct badly_typed
 struct card
 {
 	std::string cn;
+};
+
+template<class R>
+concept has_streams = requires(R &r, ldap::filter f) {
+	r.search_stream();
+	r.search_paged_stream(f, 1);
 };
 
 struct posix_card
@@ -1157,7 +1163,15 @@ TEST_CASE("sync repository: the same operations, blocking", "[net][repository][s
 	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
-	ldap::sync::repository s(c, people_base, ldap::named_by<&card::cn>);
+	ldap::repository s(c, people_base, ldap::named_by<&card::cn>);
+	static_assert(std::same_as<decltype(s), ldap::repository<&card::cn, ldap::sync::connection>>);
+	static_assert(std::same_as<decltype(s.get("X")), ldap::result<std::optional<card>>>);
+	static_assert(!has_streams<decltype(s)>);
+	static_assert(has_streams<ldap::repository<&card::cn, ldap::connection>>);
+	static_assert(std::same_as<ldap::repository<&card::cn, ldap::connection>::returns<ldap::response>,
+	  boost::capy::task<ldap::result<ldap::response>>>);
+	static_assert(std::same_as<ldap::repository<&card::cn, ldap::sync::client>::returns<ldap::response>,
+	  ldap::result<ldap::response>>);
 
 	auto all = s.search();
 	REQUIRE(all.has_value());
@@ -1178,7 +1192,7 @@ TEST_CASE("sync repository: the same operations, blocking", "[net][repository][s
 	CHECK(paged->entries[1].dn == ldap::dn{ "uid=y,ou=people,dc=example,dc=org" });
 	CHECK(srv.requests == 6);
 	CHECK(s.rename("Z", "W").has_value());
-	const ldap::sync::repository others(c, ldap::dn{ "ou=others,dc=example,dc=org" }, ldap::named_by<&card::cn>);
+	const ldap::repository others(c, ldap::dn{ "ou=others,dc=example,dc=org" }, ldap::named_by<&card::cn>);
 	CHECK(s.move("W", others).has_value());
 	CHECK(s.move("W", ldap::dn{ "ou=people,dc=example,dc=org" }).has_value());
 	CHECK(srv.requests == 9);
@@ -1188,7 +1202,7 @@ TEST_CASE("sync repository: the same operations, blocking", "[net][repository][s
 	CHECK(bad.error().code == ldap::client_errc::encode_error);
 	CHECK(srv.requests == 9);
 
-	ldap::sync::repository labelled(c, people_base, ldap::named_by<&labelled_card::cn>);
+	ldap::repository labelled(c, people_base, ldap::named_by<&labelled_card::cn>);
 	const ldap::record<labelled_card> x{ .dn = ldap::dn{ "uid=x,ou=people,dc=example,dc=org" },
 		.value = { .cn = "X", .description = std::nullopt } };
 	auto same = labelled.update(x, x.value);

@@ -4,6 +4,7 @@
 
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/run.hpp"
 
 #include <boost/capy/ex/run_async.hpp>
@@ -515,6 +516,20 @@ template<directory D, class F, class... Args> [[nodiscard]] auto run(D &d, F &&m
 	  "the I/O thread's io_context; consume it inside the task and return plain values");
 	return detail::facade_access::call(d, task_of);
 }
+
+}// namespace jhetz::ldap::sync
+
+namespace jhetz::ldap::detail {
+
+// The facades as repository sources (repository.hpp).
+template<sync::directory D> struct blocking_facade<D> : std::true_type
+{
+	template<class F> static auto run(D &d, F &&make_task) { return sync::run(d, std::forward<F>(make_task)); }
+};
+
+}// namespace jhetz::ldap::detail
+
+namespace jhetz::ldap::sync {
 
 // ldap::search_paged, blocking.
 template<directory D>

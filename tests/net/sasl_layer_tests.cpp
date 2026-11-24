@@ -870,14 +870,14 @@ TEST_CASE("RFC 4513 5.2.1.6: a repository's schema check is made again after a S
 		CHECK(error.empty());
 		CHECK(log == checked_twice);
 	}
-	SECTION("sync::repository on a sync::connection")
+	SECTION("ldap::repository on a sync::connection")
 	{
 		layer_server_thread srv;
 		{
 			auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
 			REQUIRE(opened.has_value());
 			auto &c = *opened;
-			ldap::sync::repository cards(c,
+			ldap::repository cards(c,
 			  ldap::dn{ "dc=example,dc=org" },
 			  ldap::named_by<&card::cn>,
 			  { .schema_check = ldap::schema_check::on_first_use });

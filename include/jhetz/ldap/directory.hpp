@@ -1,5 +1,6 @@
 // The `directory` concept: what repository, load_schema and the other
-// layers run on (ldap::connection, ldap::client).
+// layers run on (ldap::connection, ldap::client), and the blocking_facade
+// trait.
 #pragma once
 
 #include "jhetz/ldap/dn.hpp"
@@ -12,6 +13,7 @@
 #include <concepts>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace jhetz::ldap {
@@ -30,6 +32,12 @@ concept directory =
   };
 
 namespace detail {
+	// True for a blocking facade, whose run(d, make_task) runs make_task on
+	// d's I/O thread and returns the task's result (specialized in sync.hpp).
+	template<class D> struct blocking_facade : std::false_type
+	{
+	};
+
 	inline constexpr std::string_view load_schema_context = "load schema";
 	struct subschema_search
 	{

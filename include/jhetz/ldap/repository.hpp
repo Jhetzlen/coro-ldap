@@ -494,397 +494,406 @@ template<class T, class Stream> class record_stream
 	std::optional<error> failed_{};
 };
 
-namespace detail {
+// The sources a repository runs on: an async directory, or a blocking
+// facade (sync.hpp).
+template<class D>
+concept repository_source = directory<D> || detail::blocking_facade<D>::value;
 
-	// A repository's state and its operations over a source given to each call.
-	template<auto Naming> class repository_core
-	{
-		using codec = repository_codec<Naming>;
-
-	  public:
-		using value_type = codec::value_type;
-		using key_type = codec::key_type;
-
-		repository_core(dn base, repository_options options) : base_(std::move(base)), options_(options) {}
-
-		[[nodiscard]] auto base() const noexcept -> const dn & { return base_; }
-		[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return codec::dn_of(base_, key); }
-
-		// `entry` is dn_of(key) for the key forms; its error gets the operation's context.
-		template<directory S> auto get(S &s, result<dn> entry) -> boost::capy::task<result<std::optional<value_type>>>
-		{
-			if (!entry) {
-				co_return std::unexpected(with_context(std::move(entry.error()), "search"));
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			auto found = co_await s.search(codec::get_request(*entry));
-			co_return codec::get_result(std::move(found), *entry);
-		}
-
-		template<directory S>
-		auto add(S &s, value_type value, add_controls controls) -> boost::capy::task<result<response>>
-		{
-			co_return co_await send_checked(
-			  s, codec::add_request(base_, value, controls), [](S &d, add_params p) { return d.add(std::move(p)); });
-		}
-
-		template<directory S>
-		auto modify(S &s, result<dn> entry, std::vector<change<value_type>> changes, modify_controls controls)
-		  -> boost::capy::task<result<response>>
-		{
-			if (!entry) {
-				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
-			}
-			co_return co_await send_checked(s,
-			  codec::modify_request(std::move(*entry), std::move(changes), std::move(controls)),
-			  [](S &d, modify_params p) { return d.modify(std::move(p)); });
-		}
-
-		template<directory S>
-		auto update(S &s, result<dn> entry, value_type original, value_type changed, modify_controls controls)
-		  -> boost::capy::task<result<std::optional<response>>>
-		{
-			if (!entry) {
-				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
-			}
-			co_return co_await send_update(
-			  s, codec::update_request(std::move(*entry), original, changed, std::move(controls)));
-		}
-
-		template<directory S, class Guard>
-		auto update_if(S &s,
-		  result<dn> entry,
-		  value_type original,
-		  value_type changed,
-		  Guard guard,
-		  modify_controls controls) -> boost::capy::task<result<std::optional<response>>>
-		{
-			if (!entry) {
-				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
-			}
-			co_return co_await send_update(s,
-			  codec::update_if_request(std::move(*entry), original, changed, guard, std::move(controls)),
-			  std::same_as<Guard, every_mapped_value>);
-		}
-
-		template<directory S>
-		auto remove(S &s, result<dn> entry, del_controls controls) -> boost::capy::task<result<response>>
-		{
-			if (!entry) {
-				co_return std::unexpected(with_context(std::move(entry.error()), "delete"));
-			}
-			co_return co_await send_checked(s,
-			  result<del_params>(del_params{ .entry = std::move(*entry), .controls = std::move(controls) }),
-			  [](S &d, del_params p) { return d.del(std::move(p)); });
-		}
-
-		template<directory S>
-		auto rename(S &s, key_type from, key_type to, modify_dn_controls controls)
-		  -> boost::capy::task<result<response>>
-		{
-			co_return co_await send_checked(s, codec::rename_request(base_, from, to, controls), modify_dn_of<S>);
-		}
-		template<directory S>
-		auto move(S &s, key_type key, dn new_base, modify_dn_controls controls) -> boost::capy::task<result<response>>
-		{
-			co_return co_await send_checked(s, codec::move_request(base_, key, new_base, controls), modify_dn_of<S>);
-		}
-
-		template<directory S>
-		auto search(S &s, filter f, search_scope scope)
-		  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
-		{
-			auto request = co_await search_request(s, std::move(f), scope);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			auto found = co_await s.search(std::move(*request));
-			co_return codec::search_result_of(std::move(found), base_);
-		}
-		template<directory S>
-		auto search_stream(S &s, filter f, search_scope scope)
-		  -> boost::capy::task<result<record_stream<value_type, ldap::search_stream>>>
-		{
-			auto request = co_await search_request(s, std::move(f), scope);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			auto stream = co_await s.search_stream(std::move(*request));
-			if (!stream) {
-				co_return std::unexpected(std::move(stream.error()));
-			}
-			co_return record_stream<value_type, ldap::search_stream>(std::move(*stream), base_);
-		}
-		template<directory S>
-		auto search_paged(S &s, filter f, std::int32_t page_size, search_scope scope)
-		  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
-		{
-			auto request = co_await search_request(s, std::move(f), scope);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			auto found = co_await ldap::search_paged(s, std::move(*request), page_size);
-			co_return codec::search_result_of(std::move(found), base_);
-		}
-		template<directory S>
-		auto search_paged_stream(S &s, filter f, std::int32_t page_size, search_scope scope)
-		  -> boost::capy::task<result<record_stream<value_type, ldap::paged_search>>>
-		{
-			auto request = co_await search_request(s, std::move(f), scope);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			auto pages = co_await ldap::search_paged_stream(s, std::move(*request), page_size);
-			if (!pages) {
-				co_return std::unexpected(std::move(pages.error()));
-			}
-			co_return record_stream<value_type, ldap::paged_search>(std::move(*pages), base_);
-		}
-
-		// What search() sends, once the schema check passed.
-		template<directory S>
-		auto search_request(S &s, filter f, search_scope scope) -> boost::capy::task<result<search_params>>
-		{
-			auto request = codec::search_request(base_, std::move(f), scope);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			co_return std::move(*request);
-		}
-
-	  private:
-		template<directory S> static auto modify_dn_of(S &d, modify_dn_params p) -> boost::capy::task<result<response>>
-		{
-			return d.modify_dn(std::move(p));
-		}
-
-		// Sends `request` with `send(s, request)` once the schema check passed.
-		template<directory S, class Params, class Send>
-		auto send_checked(S &s, result<Params> request, Send send) -> boost::capy::task<result<response>>
-		{
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			co_return co_await send(s, std::move(*request));
-		}
-
-		// Sends `request` once the schema check passed; nullopt sends nothing.
-		template<directory S>
-		auto send_update(S &s, result<std::optional<modify_params>> request, bool default_guard = false)
-		  -> boost::capy::task<result<std::optional<response>>>
-		{
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			if (!*request) {
-				co_return std::optional<response>{};
-			}
-			auto c = co_await check_schema(s);
-			if (!c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			if (default_guard && !c->guardable) {
-				co_return std::unexpected(
-				  with_context(std::move(c->guardable.error()), op_context("modify", (*request)->object)));
-			}
-			auto done = co_await s.modify(std::move(**request));
-			if (!done) {
-				co_return std::unexpected(std::move(done.error()));
-			}
-			co_return std::optional<response>(std::move(*done));
-		}
-
-		// The schema check's outcome, or its schema_mismatch or load error.
-		template<directory S> auto check_schema(S &s) -> boost::capy::task<result<schema_outcome>>
-		{
-			if (options_.schema_check == ldap::schema_check::off) {
-				co_return schema_outcome{};
-			}
-			const source_protection now = protection_of(s);
-			auto known = checked_.find(now);
-			if (!known) {
-				auto schema = co_await load_schema(s);
-				if (!schema) {
-					co_return std::unexpected(std::move(schema.error()));
-				}
-				known = codec::check(*schema);
-				checked_.record(*known, now);
-			}
-			if (!known->fits) {
-				co_return std::unexpected(std::move(known->fits.error()));
-			}
-			co_return std::move(*known);
-		}
-
-		dn base_;
-		repository_options options_;
-		schema_check_cache checked_{};
-	};
-
-}// namespace detail
-
-// The entries of the struct owning `Naming` under `base`. The tasks refer
-// to *this and to the source: both must outlive them.
-template<auto Naming, directory D> class repository
+// The entries of the struct owning `Naming` under `base`, read and written
+// through `source`. Over an async directory each operation returns a task,
+// which refers to *this and to the source: both must outlive it. Over a
+// blocking facade each operation runs as one task on its I/O thread and
+// returns the result. The source must outlive the repository.
+template<auto Naming, repository_source D> class repository
 {
-	using core = detail::repository_core<Naming>;
+	using codec = detail::repository_codec<Naming>;
+	static constexpr bool blocking = detail::blocking_facade<D>::value;
 
   public:
-	using value_type = core::value_type;
-	using key_type = core::key_type;
+	using value_type = codec::value_type;
+	using key_type = codec::key_type;
 	using source_type = D;
+	// result<T> over a blocking facade, else task<result<T>>.
+	template<class T> using returns = std::conditional_t<blocking, result<T>, boost::capy::task<result<T>>>;
 
 	repository(D &source, dn base, named_by_t<Naming> /*naming*/, repository_options options = {})
-	  : source_(&source), core_(std::move(base), options)
+	  : source_(&source), base_(std::move(base)), options_(options)
 	{}
 
 	[[nodiscard]] auto source() const noexcept -> D & { return *source_; }
-	[[nodiscard]] auto base() const noexcept -> const dn & { return core_.base(); }
+	[[nodiscard]] auto base() const noexcept -> const dn & { return base_; }
 
 	// <naming attribute>=<key>,<base>.
-	[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return core_.dn_of(key); }
+	[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return codec::dn_of(base_, key); }
 
 	// nullopt when there is no entry (or none of T's object classes).
-	auto get(key_type key) -> boost::capy::task<result<std::optional<value_type>>>
+	[[nodiscard]] auto get(key_type key) -> returns<std::optional<value_type>>
 	{
-		return core_.get(*source_, core_.dn_of(key));
+		return call([&](auto &s) { return get_on(s, dn_of(key)); });
 	}
-	auto get_at(dn entry) -> boost::capy::task<result<std::optional<value_type>>>
+	[[nodiscard]] auto get_at(dn entry) -> returns<std::optional<value_type>>
 	{
-		return core_.get(*source_, std::move(entry));
+		return call([&](auto &s) { return get_on(s, std::move(entry)); });
 	}
 
 	// Adds `value` at dn_of(its naming member).
-	auto add(value_type value, add_controls controls = {}) -> boost::capy::task<result<response>>
+	[[nodiscard]] auto add(value_type value, add_controls controls = {}) -> returns<response>
 	{
-		return core_.add(*source_, std::move(value), std::move(controls));
+		return call([&](auto &s) { return add_on(s, std::move(value), std::move(controls)); });
 	}
 
-	auto modify(key_type key, std::vector<change<value_type>> changes, modify_controls controls = {})
-	  -> boost::capy::task<result<response>>
+	[[nodiscard]] auto modify(key_type key, std::vector<change<value_type>> changes, modify_controls controls = {})
+	  -> returns<response>
 	{
-		return core_.modify(*source_, core_.dn_of(key), std::move(changes), std::move(controls));
+		return call([&](auto &s) { return modify_on(s, dn_of(key), std::move(changes), std::move(controls)); });
 	}
-	auto modify_at(dn entry, std::vector<change<value_type>> changes, modify_controls controls = {})
-	  -> boost::capy::task<result<response>>
+	[[nodiscard]] auto modify_at(dn entry, std::vector<change<value_type>> changes, modify_controls controls = {})
+	  -> returns<response>
 	{
-		return core_.modify(*source_, std::move(entry), std::move(changes), std::move(controls));
+		return call([&](auto &s) { return modify_on(s, std::move(entry), std::move(changes), std::move(controls)); });
 	}
 
 	// One modify turning `original` into `changed`; nullopt, nothing sent,
 	// when no member differs.
-	auto update(const record<value_type> &original, value_type changed, modify_controls controls = {})
-	  -> boost::capy::task<result<std::optional<response>>>
+	[[nodiscard]] auto update(record<value_type> original, value_type changed, modify_controls controls = {})
+	  -> returns<std::optional<response>>
 	{
-		return core_.update(*source_, original.dn, original.value, std::move(changed), std::move(controls));
+		return call([&](auto &s) {
+			return update_on(
+			  s, std::move(original.dn), std::move(original.value), std::move(changed), std::move(controls));
+		});
 	}
-	auto update(const value_type &original, value_type changed, modify_controls controls = {})
-	  -> boost::capy::task<result<std::optional<response>>>
+	[[nodiscard]] auto update(value_type original, value_type changed, modify_controls controls = {})
+	  -> returns<std::optional<response>>
 	{
-		return core_.update(*source_, core_.dn_of(original.*Naming), original, std::move(changed), std::move(controls));
+		return call([&](auto &s) {
+			auto entry = dn_of(original.*Naming);
+			return update_on(s, std::move(entry), std::move(original), std::move(changed), std::move(controls));
+		});
 	}
 
 	// update() with an Assertion control (RFC 4528) on `original`; fails with
 	// errc::assertion_failed if the entry changed.
-	auto update_if(const record<value_type> &original, value_type changed, modify_controls controls = {})
-	  -> boost::capy::task<result<std::optional<response>>>
+	[[nodiscard]] auto update_if(record<value_type> original, value_type changed, modify_controls controls = {})
+	  -> returns<std::optional<response>>
 	{
-		return core_.update_if(
-		  *source_, original.dn, original.value, std::move(changed), detail::every_mapped_value{}, std::move(controls));
+		return update_if_guarded(
+		  std::move(original), std::move(changed), detail::every_mapped_value{}, std::move(controls));
 	}
-	auto update_if(const value_type &original, value_type changed, modify_controls controls = {})
-	  -> boost::capy::task<result<std::optional<response>>>
+	[[nodiscard]] auto update_if(value_type original, value_type changed, modify_controls controls = {})
+	  -> returns<std::optional<response>>
 	{
-		return core_.update_if(*source_,
-		  core_.dn_of(original.*Naming),
-		  original,
-		  std::move(changed),
-		  detail::every_mapped_value{},
-		  std::move(controls));
+		return update_if_guarded(
+		  std::move(original), std::move(changed), detail::every_mapped_value{}, std::move(controls));
 	}
 	template<auto Version>
-	auto update_if(const record<value_type> &original,
+	[[nodiscard]] auto update_if(record<value_type> original,
 	  value_type changed,
 	  versioned_by_t<Version> version,
-	  modify_controls controls = {}) -> boost::capy::task<result<std::optional<response>>>
+	  modify_controls controls = {}) -> returns<std::optional<response>>
 	{
-		return core_.update_if(*source_, original.dn, original.value, std::move(changed), version, std::move(controls));
+		return update_if_guarded(std::move(original), std::move(changed), version, std::move(controls));
 	}
 	template<auto Version>
-	auto update_if(const value_type &original,
-	  value_type changed,
-	  versioned_by_t<Version> version,
-	  modify_controls controls = {}) -> boost::capy::task<result<std::optional<response>>>
+	[[nodiscard]] auto
+	  update_if(value_type original, value_type changed, versioned_by_t<Version> version, modify_controls controls = {})
+		-> returns<std::optional<response>>
 	{
-		return core_.update_if(
-		  *source_, core_.dn_of(original.*Naming), original, std::move(changed), version, std::move(controls));
+		return update_if_guarded(std::move(original), std::move(changed), version, std::move(controls));
 	}
 
-	auto remove(key_type key, del_controls controls = {}) -> boost::capy::task<result<response>>
+	[[nodiscard]] auto remove(key_type key, del_controls controls = {}) -> returns<response>
 	{
-		return core_.remove(*source_, core_.dn_of(key), std::move(controls));
+		return call([&](auto &s) { return remove_on(s, dn_of(key), std::move(controls)); });
 	}
-	auto remove_at(dn entry, del_controls controls = {}) -> boost::capy::task<result<response>>
+	[[nodiscard]] auto remove_at(dn entry, del_controls controls = {}) -> returns<response>
 	{
-		return core_.remove(*source_, std::move(entry), std::move(controls));
+		return call([&](auto &s) { return remove_on(s, std::move(entry), std::move(controls)); });
 	}
 
 	// Renames `from` to `to` (deleteoldrdn TRUE).
-	auto rename(key_type from, key_type to, modify_dn_controls controls = {}) -> boost::capy::task<result<response>>
+	[[nodiscard]] auto rename(key_type from, key_type to, modify_dn_controls controls = {}) -> returns<response>
 	{
-		return core_.rename(*source_, std::move(from), std::move(to), std::move(controls));
+		return call(
+		  [&](auto &s) { return send_checked(s, codec::rename_request(base_, from, to, controls), modify_dn_of); });
 	}
 
 	// Moves the entry under `new_base`, keeping its RDN.
-	auto move(key_type key, dn new_base, modify_dn_controls controls = {}) -> boost::capy::task<result<response>>
+	[[nodiscard]] auto move(key_type key, dn new_base, modify_dn_controls controls = {}) -> returns<response>
 	{
-		return core_.move(*source_, std::move(key), std::move(new_base), std::move(controls));
+		return call(
+		  [&](auto &s) { return send_checked(s, codec::move_request(base_, key, new_base, controls), modify_dn_of); });
 	}
 	// Moves the entry under `other`'s base; runs on this repository's source.
-	template<directory Other>
-	auto move(key_type key, const repository<Naming, Other> &other, modify_dn_controls controls = {})
-	  -> boost::capy::task<result<response>>
+	template<repository_source Other>
+	[[nodiscard]] auto move(key_type key, const repository<Naming, Other> &other, modify_dn_controls controls = {})
+	  -> returns<response>
 	{
 		return move(std::move(key), other.base(), std::move(controls));
 	}
 
 	// The entries of T's object classes matching `f` under the base.
-	auto search(filter f = filters::attr("objectClass").present(), search_scope scope = search_scope::whole_subtree)
-	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
+	[[nodiscard]] auto search(filter f = filters::attr("objectClass").present(),
+	  search_scope scope = search_scope::whole_subtree) -> returns<typed_search_result<record<value_type>>>
 	{
-		return core_.search(*source_, std::move(f), scope);
+		return call([&](auto &s) { return search_on(s, std::move(f), scope); });
+	}
+	// search() in pages of `page_size` entries, every page collected.
+	[[nodiscard]] auto search_paged(filter f, std::int32_t page_size, search_scope scope = search_scope::whole_subtree)
+	  -> returns<typed_search_result<record<value_type>>>
+	{
+		return call([&](auto &s) { return search_paged_on(s, std::move(f), page_size, scope); });
 	}
 
 	auto search_stream(filter f = filters::attr("objectClass").present(),
 	  search_scope scope = search_scope::whole_subtree)
 	  -> boost::capy::task<result<record_stream<value_type, ldap::search_stream>>>
+		requires(!blocking)
 	{
-		return core_.search_stream(*source_, std::move(f), scope);
-	}
-
-	// search() in pages of `page_size` entries, every page collected.
-	auto search_paged(filter f, std::int32_t page_size, search_scope scope = search_scope::whole_subtree)
-	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
-	{
-		return core_.search_paged(*source_, std::move(f), page_size, scope);
+		return search_stream_on(*source_, std::move(f), scope);
 	}
 	auto search_paged_stream(filter f, std::int32_t page_size, search_scope scope = search_scope::whole_subtree)
 	  -> boost::capy::task<result<record_stream<value_type, ldap::paged_search>>>
+		requires(!blocking)
 	{
-		return core_.search_paged_stream(*source_, std::move(f), page_size, scope);
+		return search_paged_stream_on(*source_, std::move(f), page_size, scope);
 	}
 
   private:
+	// make_task(s), `s` being the source, or for a blocking facade its
+	// ldap::connection or ldap::client, run on its I/O thread.
+	template<class F> auto call(F make_task)
+	{
+		if constexpr (blocking) {
+			return detail::blocking_facade<D>::run(*source_, make_task);
+		} else {
+			return make_task(*source_);
+		}
+	}
+
+	template<class Guard>
+	auto update_if_guarded(record<value_type> original, value_type changed, Guard guard, modify_controls controls)
+	  -> returns<std::optional<response>>
+	{
+		return call([&](auto &s) {
+			return update_if_on(
+			  s, std::move(original.dn), std::move(original.value), std::move(changed), guard, std::move(controls));
+		});
+	}
+	template<class Guard>
+	auto update_if_guarded(value_type original, value_type changed, Guard guard, modify_controls controls)
+	  -> returns<std::optional<response>>
+	{
+		return call([&](auto &s) {
+			auto entry = dn_of(original.*Naming);
+			return update_if_on(
+			  s, std::move(entry), std::move(original), std::move(changed), guard, std::move(controls));
+		});
+	}
+
+	// The operations on the source `s`, an async directory. `entry` is
+	// dn_of(key) for the key forms; its error gets the operation's context.
+	template<directory S> auto get_on(S &s, result<dn> entry) -> boost::capy::task<result<std::optional<value_type>>>
+	{
+		if (!entry) {
+			co_return std::unexpected(detail::with_context(std::move(entry.error()), "search"));
+		}
+		if (auto c = co_await check_schema(s); !c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		auto found = co_await s.search(codec::get_request(*entry));
+		co_return codec::get_result(std::move(found), *entry);
+	}
+
+	template<directory S>
+	auto add_on(S &s, value_type value, add_controls controls) -> boost::capy::task<result<response>>
+	{
+		co_return co_await send_checked(
+		  s, codec::add_request(base_, value, controls), [](S &d, add_params p) { return d.add(std::move(p)); });
+	}
+
+	template<directory S>
+	auto modify_on(S &s, result<dn> entry, std::vector<change<value_type>> changes, modify_controls controls)
+	  -> boost::capy::task<result<response>>
+	{
+		if (!entry) {
+			co_return std::unexpected(detail::with_context(std::move(entry.error()), "modify"));
+		}
+		co_return co_await send_checked(s,
+		  codec::modify_request(std::move(*entry), std::move(changes), std::move(controls)),
+		  [](S &d, modify_params p) { return d.modify(std::move(p)); });
+	}
+
+	template<directory S>
+	auto update_on(S &s, result<dn> entry, value_type original, value_type changed, modify_controls controls)
+	  -> boost::capy::task<result<std::optional<response>>>
+	{
+		if (!entry) {
+			co_return std::unexpected(detail::with_context(std::move(entry.error()), "modify"));
+		}
+		co_return co_await send_update(
+		  s, codec::update_request(std::move(*entry), original, changed, std::move(controls)));
+	}
+
+	template<directory S, class Guard>
+	auto update_if_on(S &s,
+	  result<dn> entry,
+	  value_type original,
+	  value_type changed,
+	  Guard guard,
+	  modify_controls controls) -> boost::capy::task<result<std::optional<response>>>
+	{
+		if (!entry) {
+			co_return std::unexpected(detail::with_context(std::move(entry.error()), "modify"));
+		}
+		co_return co_await send_update(s,
+		  codec::update_if_request(std::move(*entry), original, changed, guard, std::move(controls)),
+		  std::same_as<Guard, detail::every_mapped_value>);
+	}
+
+	template<directory S>
+	auto remove_on(S &s, result<dn> entry, del_controls controls) -> boost::capy::task<result<response>>
+	{
+		if (!entry) {
+			co_return std::unexpected(detail::with_context(std::move(entry.error()), "delete"));
+		}
+		co_return co_await send_checked(s,
+		  result<del_params>(del_params{ .entry = std::move(*entry), .controls = std::move(controls) }),
+		  [](S &d, del_params p) { return d.del(std::move(p)); });
+	}
+
+	template<directory S>
+	auto search_on(S &s, filter f, search_scope scope)
+	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
+	{
+		auto request = co_await search_request(s, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		auto found = co_await s.search(std::move(*request));
+		co_return codec::search_result_of(std::move(found), base_);
+	}
+	template<directory S>
+	auto search_paged_on(S &s, filter f, std::int32_t page_size, search_scope scope)
+	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
+	{
+		auto request = co_await search_request(s, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		auto found = co_await ldap::search_paged(s, std::move(*request), page_size);
+		co_return codec::search_result_of(std::move(found), base_);
+	}
+	template<directory S>
+	auto search_stream_on(S &s, filter f, search_scope scope)
+	  -> boost::capy::task<result<record_stream<value_type, ldap::search_stream>>>
+	{
+		auto request = co_await search_request(s, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		auto stream = co_await s.search_stream(std::move(*request));
+		if (!stream) {
+			co_return std::unexpected(std::move(stream.error()));
+		}
+		co_return record_stream<value_type, ldap::search_stream>(std::move(*stream), base_);
+	}
+	template<directory S>
+	auto search_paged_stream_on(S &s, filter f, std::int32_t page_size, search_scope scope)
+	  -> boost::capy::task<result<record_stream<value_type, ldap::paged_search>>>
+	{
+		auto request = co_await search_request(s, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		auto pages = co_await ldap::search_paged_stream(s, std::move(*request), page_size);
+		if (!pages) {
+			co_return std::unexpected(std::move(pages.error()));
+		}
+		co_return record_stream<value_type, ldap::paged_search>(std::move(*pages), base_);
+	}
+
+	// What search() sends, once the schema check passed.
+	template<directory S>
+	auto search_request(S &s, filter f, search_scope scope) -> boost::capy::task<result<search_params>>
+	{
+		auto request = codec::search_request(base_, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = co_await check_schema(s); !c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		co_return std::move(*request);
+	}
+
+	static constexpr auto modify_dn_of = [](auto &d, modify_dn_params p) { return d.modify_dn(std::move(p)); };
+
+	// Sends `request` with `send(s, request)` once the schema check passed.
+	template<directory S, class Params, class Send>
+	auto send_checked(S &s, result<Params> request, Send send) -> boost::capy::task<result<response>>
+	{
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = co_await check_schema(s); !c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		co_return co_await send(s, std::move(*request));
+	}
+
+	// Sends `request` once the schema check passed; nullopt sends nothing.
+	template<directory S>
+	auto send_update(S &s, result<std::optional<modify_params>> request, bool default_guard = false)
+	  -> boost::capy::task<result<std::optional<response>>>
+	{
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		if (!*request) {
+			co_return std::optional<response>{};
+		}
+		auto c = co_await check_schema(s);
+		if (!c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		if (default_guard && !c->guardable) {
+			co_return std::unexpected(
+			  detail::with_context(std::move(c->guardable.error()), detail::op_context("modify", (*request)->object)));
+		}
+		auto done = co_await s.modify(std::move(**request));
+		if (!done) {
+			co_return std::unexpected(std::move(done.error()));
+		}
+		co_return std::optional<response>(std::move(*done));
+	}
+
+	// The schema check's outcome, or its schema_mismatch or load error.
+	template<directory S> auto check_schema(S &s) -> boost::capy::task<result<detail::schema_outcome>>
+	{
+		if (options_.schema_check == ldap::schema_check::off) {
+			co_return detail::schema_outcome{};
+		}
+		const detail::source_protection now = detail::protection_of(s);
+		auto known = checked_.find(now);
+		if (!known) {
+			auto schema = co_await load_schema(s);
+			if (!schema) {
+				co_return std::unexpected(std::move(schema.error()));
+			}
+			known = codec::check(*schema);
+			checked_.record(*known, now);
+		}
+		if (!known->fits) {
+			co_return std::unexpected(std::move(known->fits.error()));
+		}
+		co_return std::move(*known);
+	}
+
 	D *source_;
-	core core_;
+	dn base_;
+	repository_options options_;
+	detail::schema_check_cache checked_{};
 };
 
 }// namespace jhetz::ldap

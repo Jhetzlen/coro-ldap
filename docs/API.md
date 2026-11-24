@@ -785,7 +785,7 @@ itself needs only ICU.
   `ldap::search_paged_stream`; `repository::search_paged(page_size,
   filter, scope)` was the stream, now `search_paged_stream(filter,
   page_size, scope)`, and `search_paged(filter, page_size, scope)` collects
-  (also the order of `sync::repository::search_paged`).
+  (also the order of the blocking repository's `search_paged`).
 - `jhetz/ldap/referral_chase.hpp`: opt-in referral chasing.
   `co_await ldap::chase_search(conn, params, connector, policy, mr)` runs
   the search, then follows a referral result and the continuation
@@ -1407,14 +1407,21 @@ itself needs only ICU.
   run on: every server of a pool must serve the same schema; use a
   lease's connection (`*lease`) as the source for a check per
   connection. The repository keeps a pointer to the source, which must
-  outlive it and its tasks. `jhetz/ldap/sync_repository.hpp`:
-  `sync::load_schema` and `sync::repository`, the same over
-  `sync::connection`, `sync::client`, `sync::lease` and
-  `sync::exclusive_lease` (`sync::directory`), blocking (no streams:
-  `search_paged` collects every page into a
-  `typed_search_result<record<T>>`); each `sync::repository` call runs the
-  async repository's operation (`detail::repository_core`, shared with
-  `ldap::repository`) as one task on the I/O thread.
+  outlive it and its tasks. The same `ldap::repository` runs over a
+  blocking facade, `sync::connection`, `sync::client`, `sync::lease` or
+  `sync::exclusive_lease` (`sync::directory`;
+  `jhetz/ldap/sync_repository.hpp` also has `sync::load_schema`):
+  `ldap::repository people(sync_conn, base, ldap::named_by<&person::uid>)`
+  deduces `repository<&person::uid, sync::connection>`, whose members
+  are the same, with the same parameters, and return `result<T>` instead
+  of `task<result<T>>` (`repository::returns<T>`), each call one task on
+  the I/O thread. The streams `search_stream` and `search_paged_stream`
+  are async only; `search_paged` collects every page in both modes.
+  `repository_source` is the concept of the sources (`ldap::directory` or
+  a blocking facade). Breaking (coro-ldap-3jj.5): `sync::repository` is
+  removed (use `ldap::repository` over the facade), and its parameters
+  are by value as the async ones (`update(record<T>, T, controls)`
+  included).
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
@@ -1447,7 +1454,7 @@ itself needs only ICU.
   a `static_assert`. `sync::directory` is the concept of the four facades
   (`sync::connection`, `sync::lease`, `sync::exclusive_lease`,
   `sync::client`); the blocking conveniences (`sync::who_am_i`,
-  `sync::search_paged`, `sync::load_schema`, `sync::repository`,
+  `sync::search_paged`, `sync::load_schema`, `ldap::repository`,
   `ad::change_password`, ...) are written over it. Breaking:
   `sync::directory` was a structural concept (blocking `search`, `add`,
   ...), and `sync::search_paged(client &)` and `sync::load_schema(client

@@ -1869,15 +1869,36 @@ co_await people.remove("jdoe");
   the outcome: a mismatch fails every later operation with
   `schema_mismatch`, a load failure is retried by the next operation.
   Over a client that is one check for the whole pool (section 6).
-- `detail::repository_core<Naming>` holds the base, the options, the
-  schema-check outcome and every operation, over a source passed to each
-  call. Each operation on one entry takes a `result<dn>`: the key forms
-  pass `dn_of(key)`, whose error the core gives the operation's context.
-  The requests and results without the I/O are
-  `detail::repository_codec<Naming>`. `ldap::repository` runs the core on its
-  source; `sync::repository` (sync_repository.hpp) runs it on its facade's
-  `ldap::connection` or `ldap::client` with `sync::run` (section 7), one
-  task on the I/O thread per call, the schema check included.
+- One `ldap::repository<Naming, D>` serves both modes (coro-ldap-3jj.5):
+  each public member is written once and forwards to a private member
+  coroutine (`get_on`, `modify_on`, ...) over an async directory `s`,
+  through a private `call(make_task)`. Over an async `D`, `call` returns
+  `make_task(source)`, the task; over a blocking facade,
+  `detail::blocking_facade<D>::run(source, make_task)` runs it with
+  `sync::run` (section 7) on the facade's `ldap::connection` or
+  `ldap::client`, one task on the I/O thread per call, the schema check
+  included, and returns its result. The member's return type is
+  `returns<T>`: `result<T>` when `blocking_facade<D>::value`, else
+  `task<result<T>>`. The trait's primary template (false) is in
+  directory.hpp and sync.hpp specializes it for `sync::directory`, so
+  repository.hpp never includes sync.hpp, and the mode is a property of
+  the source type, not a second class. The streams are `requires
+  (!blocking)`: a member never changes meaning between the modes, it is
+  absent where it cannot work (a stream lives on the I/O thread). The
+  trait carries both the flag and the run hook, rather than a flag plus
+  an ADL `run_on` overload: one customization point, found without ADL
+  (the facades live in `ldap::sync`, so an ADL hook would have had to be
+  declared there, not in `detail`). Parameters are by value in both
+  modes, as a task needs its own copies; a blocking call pays the same
+  moves. Each operation on one entry takes a `result<dn>`: the key forms
+  pass `dn_of(key)`, whose error the operation gets its context. The
+  requests and results without the I/O are
+  `detail::repository_codec<Naming>`. The rejected alternatives: a
+  separate `sync::repository` over a shared core (two member lists,
+  every signature and default written twice, and `search_paged` meaning a
+  stream on one side and a collected result on the other), and a CRTP
+  base (the two lists' return types differ, and inherited members change
+  `&repository::member`'s type).
 
 **C++26 path:** reflection generates `ldap::schema<T>` from the struct, with
 an annotation to rename (`[[=ldap::name("memberOf")]]`). The descriptor stays
@@ -2782,7 +2803,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     hops client strand, connection strand, client strand.
   - `repository<T>` keeps its schema-check outcome in a mutex-guarded
     `detail::schema_check_cache`, so one repository may be used from several
-    threads (`sync::repository` too).
+    threads, in both modes.
   - Out of scope, documented: value types (`entry`, `dn`,
     `search_result`) follow the standard library's rules; a memory
     resource the caller passes for a search's entries must allow the
@@ -2842,7 +2863,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   conveniences are written that way, each a line over the async function
   (`sync::who_am_i` and the password calls, `sync::load_schema`,
   `sync::search_paged`, `ad::change_password` / `reset_password` in
-  ad/sync.hpp), and so is `sync::repository`, over the async repository's core. A
+  ad/sync.hpp), and so is `ldap::repository` over a facade, each call one `sync::run`. A
   whole convenience is one task on the I/O thread, not one round trip
   per protocol call, and it behaves exactly as the async one (the
   client's retries, AD's protection check on the connection the modify

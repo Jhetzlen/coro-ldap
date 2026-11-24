@@ -975,7 +975,7 @@ TEST_CASE("sync repository: schema_check::on_first_use", "[net][sync][repository
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
-			ldap::sync::repository cards(
+			ldap::repository cards(
 			  pool, cards_base, ldap::named_by<&card::cn>, { .schema_check = ldap::schema_check::on_first_use });
 			for (int i = 0; i < 2; ++i) {
 				auto r = cards.get("a");
@@ -996,7 +996,7 @@ TEST_CASE("sync repository: schema_check::on_first_use", "[net][sync][repository
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
-			ldap::sync::repository cards(pool,
+			ldap::repository cards(pool,
 			  cards_base,
 			  ldap::named_by<&badly_typed_card::cn>,
 			  { .schema_check = ldap::schema_check::on_first_use });
@@ -1022,7 +1022,7 @@ TEST_CASE("sync repository: schema_check::on_first_use", "[net][sync][repository
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
-			ldap::sync::repository cards(
+			ldap::repository cards(
 			  pool, cards_base, ldap::named_by<&card::cn>, { .schema_check = ldap::schema_check::on_first_use });
 			auto first = cards.remove("a");
 			REQUIRE_FALSE(first.has_value());
