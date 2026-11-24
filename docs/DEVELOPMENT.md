@@ -313,6 +313,17 @@ it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
 `_COROSIO` when set, else clones the commits pinned in `CMakeLists.txt` into
 `WORK_DIR`.
 
+## Releasing
+
+`project(jhetz_ldap VERSION X.Y.Z)` in `CMakeLists.txt` is the version; the
+installed `jhetz_ldap-config-version.cmake` is generated from it with
+`SameMinorVersion` while it is 0.x. A release:
+
+1. Set the version in `project()`, add its section to `CHANGELOG.md` (with
+   the Breaking lines added to `docs/API.md` since the last release).
+2. Tag the commit on main and push the tag: `git tag -a vX.Y.Z -m vX.Y.Z`,
+   `git push origin vX.Y.Z`.
+
 ## Examples
 
 Bare programs in `examples/`, one action each (option
