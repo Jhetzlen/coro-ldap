@@ -1,8 +1,14 @@
 #include "jhetz/ldap/ad/dirsync.hpp"
 #include "jhetz/ldap/connection.hpp"
 
+#include <boost/capy/when_any.hpp>
+#include <boost/corosio/delay.hpp>
 #include <boost/corosio/io_context.hpp>
+#include <boost/corosio/signal_set.hpp>
 
+#include <chrono>
+#include <csignal>
+#include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -23,19 +29,25 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		co_return 1;
 	}
 	std::ifstream saved("dirsync.cookie", std::ios::binary);
-	std::string cookie{ std::istreambuf_iterator<char>(saved), {} };
-	auto changes = co_await ldap::ad::dirsync(*c,
-	  { .base = ldap::dn{ "dc=example,dc=org" } },
-	  { .flags = ldap::ad::dirsync_flags::object_security, .cookie = std::move(cookie) });
-	if (!changes) {
-		std::cerr << changes.error().message() << '\n';
-		co_return 1;
-	}
-	for (const auto &entry : changes->entries) {
-		std::cout << (entry.find("isDeleted") != nullptr ? "deleted " : "changed ") << entry.dn << '\n';
-	}
-	std::ofstream("dirsync.cookie", std::ios::binary) << changes->cookie;
-	std::cout << changes->cookie.size() << "-byte cookie saved for the next run\n";
+	ldap::ad::dirsync_request options{ .flags = ldap::ad::dirsync_flags::object_security,
+		.cookie = { std::istreambuf_iterator<char>(saved), {} } };
+	const ldap::search_params domain{ .base = ldap::dn{ "dc=example,dc=org" } };
+	boost::corosio::signal_set stop(ioc, SIGINT, SIGTERM);
+	constexpr std::size_t signalled = 1;
+	do {
+		auto changes = co_await ldap::ad::dirsync(*c, domain, options);
+		if (!changes) {
+			std::cerr << changes.error().message() << '\n';
+			co_return 1;
+		}
+		for (const auto &entry : changes->entries) {
+			std::cout << (entry.find("isDeleted") != nullptr ? "deleted " : "changed ") << entry.dn << '\n';
+		}
+		options.cookie = std::move(changes->cookie);
+		std::ofstream("dirsync.cookie", std::ios::binary) << options.cookie;
+	} while ((co_await boost::capy::when_any(stop.wait(), boost::corosio::delay(std::chrono::seconds(30)))).index()
+			 != signalled);
+	std::cout << "stopped\n";
 	co_return 0;
 }
 
