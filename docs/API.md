@@ -291,9 +291,11 @@ itself needs only ICU.
   connection wins),
   sets TCP_NODELAY, and for `ldaps://` runs the TLS handshake with
   certificate and host name verification, SNI and TLS 1.2+ by default
-  (`tls_options`: CA file / directory (`std::filesystem::path`) / PEM, client
-  certificate, `server_name`, and `certificate_verification::insecure_accept_any`
-  as the explicit opt-out). TLS configuration (files, certificates, `ca_dir`,
+  (`net::connect_options`: `timeout`, `tls`, `attempt_delay`,
+  `tcp_no_delay`; `tls_options`: `verification` (`certificate_verification::full`,
+  `insecure_accept_any` as the explicit opt-out), CA file / directory
+  (`std::filesystem::path`) / PEM, client certificate, `server_name`,
+  `host_matching`, and `min_version` (TLS 1.2 by default)). TLS configuration (files, certificates, `ca_dir`,
   `server_name`) is checked before any network traffic.
   - Timeout: `milliseconds timeout` (default 30 s) bounds the
     whole connect; `ldap::no_timeout` means no limit, zero or negative fails
@@ -472,7 +474,8 @@ itself needs only ICU.
   and `unbind()`. `search_params` is a plain aggregate for designated
   initializers (`.base`, `.scope`, `.filter`, `.attributes`, `.deref`,
   `.size_limit`, `.time_limit`, `.types_only`, `.controls`, `.timeout`,
-  `.intermediate_responses`); `.base` is required (a `search_base`, an
+  `.intermediate_responses`, and `.follow_referrals` / `.follow_references`,
+  read only by `ldap::client` and `sync::client`, below); `.base` is required (a `search_base`, an
   `ldap::dn` with no default constructor: leaving it out does not compile,
   and `.base = ldap::dn{}` searches from the empty DN), and
   `ldap::root_dse(attributes = {"*", "+"})` is the root DSE read (base_object
