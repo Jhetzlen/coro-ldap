@@ -23,7 +23,7 @@ Windows is ported but unverified; macOS is not supported.
 - Controls, transactions (RFC 5805) and syncrepl (RFC 4533)
 - UTF-8 everywhere, with server-like matching rules (RFC 4517, RFC 4518 string preparation)
 - Errors as values: every operation returns `ldap::result<T>` (a `std::expected`)
-- A codec library (`jhetz::ldap`: BER, messages, DN, filter, URL) whose only dependency is ICU
+- A codec part (BER, messages, DN, filter, URL) usable on its own, whose only dependency is ICU
 
 ## Example
 
@@ -83,11 +83,17 @@ results) is in [`examples/`](examples/), one small program per task.
 
 - CMake 3.25+
 - GCC 16+, or Clang 23+ with libstdc++ 16+ (MSVC 19.40+ / clang-cl on Windows)
-- ICU 60+ development files
-- OpenSSL, for `jhetz::ldap_net`
-- MIT krb5 (`libgssapi_krb5`, via pkg-config), only with `-DJHETZ_LDAP_WITH_GSSAPI=ON`
 
-Capy, Corosio and Catch2 are fetched by CMake. Debian: `apt install libicu-dev libssl-dev`.
+| Dependency | Why | How |
+|---|---|---|
+| [Corosio](https://github.com/cppalliance/corosio) | Async sockets, timers, DNS, and the `io_context` the client runs on | fetched by CMake |
+| [Capy](https://github.com/cppalliance/capy) | The coroutine `task` type, executors and strands | fetched by CMake |
+| OpenSSL | TLS for `ldaps://` and StartTLS (through Corosio), and the hashing for SASL SCRAM and NTLM | install it |
+| ICU 60+ | UTF-8 handling and Unicode string preparation (RFC 4518, SASLprep) | install it |
+| MIT krb5 (optional) | SASL GSSAPI / Kerberos, only with `-DJHETZ_LDAP_WITH_GSSAPI=ON` (`libgssapi_krb5`, via pkg-config) | install it |
+| Catch2 | Tests only | fetched by CMake |
+
+Debian: `apt install libicu-dev libssl-dev` (plus `libkrb5-dev pkg-config` for GSSAPI).
 
 ## Build and use
 
@@ -97,13 +103,19 @@ cmake --build build
 ctest --test-dir build
 ```
 
+Link the CMake target `jhetz::ldap_net` for the client (connections, TLS, SASL,
+the sync API). `jhetz::ldap` alone is the codec (BER, DN, filters) with no
+networking, and `jhetz::ldap_ad` adds the Active Directory operations. These
+are CMake target names only: the C++ namespace is `jhetz::ldap` in every case
+(with `ldap::sync`, `ldap::ad` and `ldap::net`).
+
 From your project, with FetchContent (or `add_subdirectory`):
 
 ```cmake
 include(FetchContent)
 FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG main)
 FetchContent_MakeAvailable(coro_ldap)
-target_link_libraries(app PRIVATE jhetz::ldap_net)   # jhetz::ldap: the codec only
+target_link_libraries(app PRIVATE jhetz::ldap_net)
 ```
 
 Or, after `cmake --install` (the `net` component needs Capy and Corosio installed too):
