@@ -340,6 +340,7 @@ URL (`ldap://localhost`).
 | `referrals.cpp` | search `dc=example,dc=org` and follow its referrals to hosts under `example.org` (`chase_search` with `make_same_policy_connector`) |
 | `gssapi.cpp` | StartTLS, then a Kerberos bind with the default ticket (`sasl_gssapi`; built with `JHETZ_LDAP_WITH_GSSAPI`) |
 | `ntlm.cpp` | an NTLMv2 bind to Active Directory with a user name and a password (from `LDAP_PASSWORD`) over ldaps:// (`sasl_ntlm`, SASL GSS-SPNEGO; TLS required by default) |
+| `dirsync.cpp` | one AD DirSync poll of `dc=example,dc=org` over ldaps:// (`ad::dirsync`): print each changed or deleted entry's DN, then save the cookie to `dirsync.cookie` for the next run |
 
 `examples/ldapsearch.cpp` (see [API.md](API.md)) is a fuller command-line tool. To try an
 example against the throwaway slapd of the integration tests:

@@ -321,7 +321,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (docs/DEVELOPMENT.md, "Examples").
-    set(jhetz_ldap_examples connect search pool modify add delete move password starttls cancel blocking blocking_pool blocking_repository bulk paged syncrepl typed_crud referrals ntlm transaction update_if)
+    set(jhetz_ldap_examples connect search pool modify add delete move password starttls cancel blocking blocking_pool blocking_repository bulk paged syncrepl typed_crud referrals ntlm dirsync transaction update_if)
     if(JHETZ_LDAP_WITH_GSSAPI)
         list(APPEND jhetz_ldap_examples gssapi)
     endif()
@@ -330,6 +330,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
         target_link_libraries(jhetz_ldap_example_${example} PRIVATE jhetz::ldap_net)
         jhetz_ldap_warnings(jhetz_ldap_example_${example})
     endforeach()
+    target_link_libraries(jhetz_ldap_example_dirsync PRIVATE jhetz::ldap_ad)
 endif()
 
 # cmake --install: headers, libraries and the jhetz_ldap package;
