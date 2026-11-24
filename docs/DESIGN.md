@@ -241,7 +241,8 @@ uses constructors instead (`message{1, search_request{base, scope, f, {"cn"}}}`)
 
 Implemented (steps 5a and 6, `operations.hpp`): one aggregate per
 operation — `search_params`, `add_params`, `modify_params` (changes built
-with `ldap::mod::add / remove / replace / increment`), `del_params`,
+with `ldap::mod::add / remove / replace / increment`, from a braced list
+or an `ldap::string_range` of values), `del_params`,
 `modify_dn_params` (`new_rdn` as an `ldap::rdn`, optional `new_superior`),
 `compare_params`, `extended_params` — each with `.controls` and a
 client-side `.timeout`. Values are checked when the request is encoded,

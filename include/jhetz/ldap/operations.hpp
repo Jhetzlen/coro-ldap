@@ -141,6 +141,18 @@ namespace mod {
 	  -> modify_change;
 	// Replaces all values (none: deletes the attribute if present).
 	[[nodiscard]] auto replace(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change;
+	template<string_range R> [[nodiscard]] auto add(std::string_view type, R &&values) -> modify_change
+	{
+		return { modify_operation::add, partial_attribute(type, std::forward<R>(values)) };
+	}
+	template<string_range R> [[nodiscard]] auto remove(std::string_view type, R &&values) -> modify_change
+	{
+		return { modify_operation::delete_, partial_attribute(type, std::forward<R>(values)) };
+	}
+	template<string_range R> [[nodiscard]] auto replace(std::string_view type, R &&values) -> modify_change
+	{
+		return { modify_operation::replace, partial_attribute(type, std::forward<R>(values)) };
+	}
 	// RFC 4525 Modify-Increment.
 	[[nodiscard]] auto increment(std::string_view type, std::string_view delta = "1") -> modify_change;
 }// namespace mod

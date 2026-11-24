@@ -667,7 +667,10 @@ itself needs only ICU.
   TSan reports. `locking_mode::unsafe_io` and `unsafe` opt out of
   cross-thread use.
   Step 6 adds the other operations: `add`, `modify` (changes from
-  `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
+  `ldap::mod::add / remove / replace / increment`; `add`, `remove` and
+  `replace` take a braced list or any `ldap::string_range`, such as a
+  `std::vector<std::string>`, like `partial_attribute(type, values)`),
+  `del`, `modify_dn`
   (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,
   .new_superior}`; breaking (coro-ldap-aw4.3): `move()` and `rename()`
   are gone from `connection`, `client` and the sync facades), `compare`

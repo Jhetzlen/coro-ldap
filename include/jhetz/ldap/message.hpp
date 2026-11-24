@@ -6,11 +6,13 @@
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/filter.hpp"
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -92,6 +94,11 @@ struct control
 	friend auto operator==(const control &, const control &) -> bool = default;
 };
 
+// A range whose elements convert to std::string_view.
+template<typename R>
+concept string_range =
+  std::ranges::input_range<R> && std::convertible_to<std::ranges::range_reference_t<R>, std::string_view>;
+
 // PartialAttribute / Attribute (RFC 4511 section 4.1.7).
 struct partial_attribute
 {
@@ -106,6 +113,17 @@ struct partial_attribute
 	partial_attribute(std::string_view type_,
 	  std::initializer_list<std::string_view> values_,
 	  const allocator_type &alloc = {});
+	template<string_range R>
+	partial_attribute(std::string_view type_, R &&values_, const allocator_type &alloc = {})
+	  : type(type_, alloc), values(alloc)
+	{
+		if constexpr (std::ranges::sized_range<R>) {
+			values.reserve(std::ranges::size(values_));
+		}
+		for (auto &&v : values_) {
+			values.emplace_back(std::string_view(v));
+		}
+	}
 	partial_attribute(const partial_attribute &) = default;
 	partial_attribute(partial_attribute &&) noexcept = default;
 	partial_attribute(const partial_attribute &other, const allocator_type &alloc)

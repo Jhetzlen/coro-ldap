@@ -1,14 +1,17 @@
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/testing/server_codec.hpp"
 #include "sample_messages.hpp"
 #include "test_util.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -735,6 +738,28 @@ TEST_CASE("regression: many tiny values cannot multiply a message's size in memo
 		REQUIRE_FALSE(r);
 		CHECK(r.error().code == client_errc::message_too_large);
 	}
+}
+
+TEST_CASE("partial_attribute and ldap::mod take ranges of values", "[message]")
+{
+	const std::vector<std::string> mails{ "a@example.org", "b\xc3\xa9@example.org" };
+	const ldap::partial_attribute expected{ "mail", { "a@example.org", "b\xc3\xa9@example.org" } };
+	CHECK(ldap::partial_attribute("mail", mails) == expected);
+	CHECK(ldap::partial_attribute("mail", std::vector<std::string>(mails)) == expected);
+	const std::array<std::string_view, 2> views{ "a@example.org", "b\xc3\xa9@example.org" };
+	CHECK(ldap::partial_attribute("mail", views) == expected);
+	CHECK(ldap::partial_attribute("mail", std::vector<std::string>{}).values.empty());
+
+	std::pmr::monotonic_buffer_resource mr;
+	const ldap::partial_attribute on_mr("mail", mails, &mr);
+	CHECK(on_mr.get_allocator().resource() == &mr);
+	CHECK(on_mr.values.front().get_allocator().resource() == &mr);
+
+	CHECK(ldap::mod::add("mail", mails) == ldap::modify_change{ ldap::modify_operation::add, expected });
+	CHECK(ldap::mod::remove("mail", views) == ldap::modify_change{ ldap::modify_operation::delete_, expected });
+	CHECK(ldap::mod::replace("mail", mails) == ldap::modify_change{ ldap::modify_operation::replace, expected });
+	CHECK(ldap::mod::add("mail", { "a@example.org", "b\xc3\xa9@example.org" }) == ldap::mod::add("mail", mails));
+	CHECK(ldap::mod::remove("mail").modification.values.empty());
 }
 
 TEST_CASE("add and modify-add values must not be empty", "[message]")
