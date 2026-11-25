@@ -13,8 +13,8 @@ foreach(_jhetz_ldap_component net ad)
 endforeach()
 set(jhetz_ldap_gssapi_FOUND @JHETZ_LDAP_PACKAGE_GSSAPI@)
 include(CMakeFindDependencyMacro)
-# Linked privately, but the static jhetz::ldap_core and jhetz::ldap need it
-# at link time.
+# Linked privately: a static jhetz::ldap_core needs it at link time, a
+# shared one as a dependent library.
 find_dependency(ICU 60 COMPONENTS uc data)
 if(@JHETZ_LDAP_PACKAGE_NET@)
     find_dependency(boost_corosio CONFIG)

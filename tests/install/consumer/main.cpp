@@ -24,6 +24,7 @@
 
 #include <cstdio>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -65,13 +66,17 @@ auto main() -> int
 	}
 	// jhetz::ldap_ad: a reset on a connection that is not open.
 	ldap::connection none;
-	bool refused = false;
-	boost::capy::run_async(ioc.get_executor(), [&](ldap::result<void> r) { refused = !r; })(
-	  ldap::ad::reset_password(none, ldap::dn{ "cn=x" }, "pw"));
+	std::error_code refused;
+	boost::capy::run_async(ioc.get_executor(), [&](ldap::result<void> r) {
+		if (!r) {
+			refused = r.error().code;
+		}
+	})(ldap::ad::reset_password(none, ldap::dn{ "cn=x" }, "pw"));
 	ioc.restart();
 	ioc.run();
-	if (!refused) {
-		std::puts("ad: expected the reset to fail");
+	// The library's error category against the consumer's condition.
+	if (refused != ldap::cond::connection_lost) {
+		std::puts("ad: expected the reset to fail with cond::connection_lost");
 		return 1;
 	}
 	// jhetz::ldap_ad's discovery (ICU, the resolver library) with a scripted

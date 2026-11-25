@@ -153,6 +153,27 @@ function(jhetz_ldap_warnings target)
     endif()
 endfunction()
 
+# Our libraries: static or shared as BUILD_SHARED_LIBS says (Capy and
+# Corosio follow it too), always position-independent; on Windows a DLL
+# exports every symbol.
+function(jhetz_ldap_library target)
+    set_target_properties(${target} PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
+        POSITION_INDEPENDENT_CODE ON
+        WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    jhetz_ldap_warnings(${target})
+endfunction()
+
+# Position-independent code for the fetched Capy and Corosio too; on
+# Windows a shared build puts every DLL next to the executables.
+if(NOT DEFINED CMAKE_POSITION_INDEPENDENT_CODE)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+if(WIN32 AND BUILD_SHARED_LIBS AND PROJECT_IS_TOP_LEVEL AND NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+endif()
+
 # ICU 60+ (U8_NEXT's maximal subparts): UTF-8, character properties,
 # LDAPprep and SASLprep. `data` for a static ICU.
 find_package(ICU 60 COMPONENTS uc data)
@@ -161,7 +182,7 @@ if(NOT ICU_FOUND)
         "vcpkg install icu and configure with -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake)")
 endif()
 
-add_library(jhetz_ldap_core STATIC
+add_library(jhetz_ldap_core
     src/ad/controls.cpp
     src/ad/diagnostic.cpp
     src/ad/guid.cpp
@@ -197,7 +218,7 @@ set_target_properties(jhetz_ldap_core PROPERTIES EXPORT_NAME ldap_core)
 target_compile_features(jhetz_ldap_core PUBLIC cxx_std_23)
 # PRIVATE: the public headers do not include ICU's.
 target_link_libraries(jhetz_ldap_core PRIVATE ICU::uc ICU::data)
-jhetz_ldap_warnings(jhetz_ldap_core)
+jhetz_ldap_library(jhetz_ldap_core)
 
 if(JHETZ_LDAP_BUILD_NET)
     include(FetchContent)
@@ -237,7 +258,7 @@ if(JHETZ_LDAP_BUILD_NET)
         message(FATAL_ERROR "jhetz::ldap needs OpenSSL (e.g. apt install libssl-dev; on Windows "
             "vcpkg install openssl with the vcpkg toolchain file), or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
     endif()
-    add_library(jhetz_ldap STATIC
+    add_library(jhetz_ldap
         src/connection/connection.cpp
         src/connection/start_tls.cpp
         src/connection/bind.cpp
@@ -278,7 +299,7 @@ if(JHETZ_LDAP_BUILD_NET)
     set_target_properties(jhetz_ldap PROPERTIES EXPORT_NAME ldap)
     target_link_libraries(jhetz_ldap PUBLIC jhetz_ldap_core Boost::corosio Boost::corosio_openssl
         PRIVATE ICU::uc ICU::data)
-    jhetz_ldap_warnings(jhetz_ldap)
+    jhetz_ldap_library(jhetz_ldap)
     # SASL GSSAPI, optional: the front-end and one security context backend,
     # SSPI (secur32) on Windows, else the GSS-API library through pkg-config.
     if(JHETZ_LDAP_WITH_GSSAPI)
@@ -307,7 +328,7 @@ endif()
 # jhetz::ldap_ad: the Active Directory operations over jhetz::ldap's
 # public API; its codec-level headers are in jhetz::ldap_core.
 if(JHETZ_LDAP_BUILD_NET)
-    add_library(jhetz_ldap_ad STATIC
+    add_library(jhetz_ldap_ad
         src/ad/discover.cpp
         src/ad/dirsync.cpp
         src/ad/password.cpp
@@ -322,7 +343,7 @@ if(JHETZ_LDAP_BUILD_NET)
     else()
         target_link_libraries(jhetz_ldap_ad PRIVATE resolv)
     endif()
-    jhetz_ldap_warnings(jhetz_ldap_ad)
+    jhetz_ldap_library(jhetz_ldap_ad)
 endif()
 
 if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
