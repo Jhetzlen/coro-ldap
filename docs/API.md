@@ -25,10 +25,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 
 ## `jhetz::ldap_core`: the codec
 
-The CMake target `jhetz::ldap_core` (no networking, ICU only). Breaking
-(coro-ldap-ckq): the codec target was `jhetz::ldap` and the client target
-`jhetz::ldap_net`; the client is now `jhetz::ldap` (below), with no aliases
-for the old names.
+The CMake target `jhetz::ldap_core` (no networking, ICU only).
 
 - `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
   `ldap::errc` (RFC 4511 result codes, RFC 4528's `assertion_failed`, RFC
@@ -47,9 +44,7 @@ for the old names.
   `result_code` (`ldap_result`, `basic_search_result`, `sort_result`,
   `vlv_response`) also has `code()`, the `std::error_code` in
   `ldap.result`: `if (found->code() == ldap::errc::size_limit_exceeded)`.
-  Breaking (coro-ldap-bhe.9): `error::diagnostic` is now
-  `error::diagnostic_message`, and `error::matched_dn` is a plain string
-  (was `std::optional`; empty means none).
+  `error::matched_dn` is a plain string, empty when there is none.
 - `jhetz/ldap/ber.hpp`: the restricted BER codec LDAP uses (RFC 4511 section 5.1):
   `ber::writer` (its buffer on a `memory_resource`, reusable), `ber::reader`
   (non-owning, depth-bounded, safe on untrusted input) and the framer
@@ -103,12 +98,11 @@ for the old names.
   decoder is the testing target's, not installed: DESIGN.md section 10).
   `decode(encode(m)) == m` exactly for a response (for any operation with
   the testing target's `testing::decode`), and re-encoding is
-  byte-identical. Breaking (coro-ldap-3jj.1): `decode_options::from` and
-  `::filter`, `ldap::origin`, `decode_filter` and the server-side control
-  and value codecs (`encode_sort_result`, `encode_vlv_response`,
-  `encode_read_entry`, `decode_sync_request`, `encode_sync_*`,
-  `ad::decode_dirsync_request`, ...) left the public headers for
-  `ldap::testing` (testing/include/, not installed).
+  byte-identical. The server-side control and value codecs
+  (`encode_sort_result`, `encode_vlv_response`, `encode_read_entry`,
+  `decode_sync_request`, `encode_sync_*`, `ad::decode_dirsync_request`,
+  ...) and `decode_filter` are `ldap::testing`'s (testing/include/, not
+  installed).
   `decode_options` limits the reader depth and the decoded strings;
   `memory` is the resource everything decoded is allocated from. The
   types have constructors taking the fields in order
@@ -177,8 +171,7 @@ for the old names.
   attribute given to `filters::attr` that is not a valid description (only
   possible with `attribute::unchecked`) makes every filter built from it a
   `failed()` one (`invalid_attribute`), and so does a bad extensible-match
-  rule (`invalid_filter`). Breaking (coro-ldap-bhe.10): these threw
-  `std::invalid_argument`.
+  rule (`invalid_filter`).
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Its `==` is
   syntactic (values exact after unescaping, `cn=A` != `cn=a`); compare as a
@@ -196,9 +189,7 @@ for the old names.
   escapes octets that are not valid UTF-8. `child(rdn)` returns
   `result<dn>`, `client_errc::invalid_dn` for an RDN without an AVA, a bad
   type or an empty `#` value; `child(dn)` cannot fail and returns `dn`.
-  `base.child({"uid=jdoe"})` is ambiguous: name the type. Breaking
-  (coro-ldap-bhe.10): `child(rdn)` returned `dn` and threw
-  `std::invalid_argument`.
+  `base.child({"uid=jdoe"})` is ambiguous: name the type.
 - `jhetz/ldap/matching.hpp`: RFC 4517 matching rules on values prepared by
   LDAPprep (RFC 4518). Each rule is a function named after it, taking the
   attribute value and the assertion value and returning `match_result`
@@ -399,7 +390,7 @@ itself needs only ICU.
   `write_bytes` sends raw bytes.
 
 - `jhetz/ldap/connection.hpp` (steps 5a, 5b): `ldap::connection`, the
-  client API, with `ldap::connect()`. Breaking (coro-ldap-vk8):
+  client API, with `ldap::connect()`.
   `ldap::connection` is copyable, like Rust ldap3's `Ldap`: a copy is
   another handle on the same session (operations multiplexed on its
   strand; bind identity, TLS and security layer shared). Destroying or
@@ -448,8 +439,7 @@ itself needs only ICU.
     rethrows its exception (also one `f` throws); `std::system_error` with
     `capy::error::canceled` if `ioc` was stopped (or the task abandoned)
     before the task ended; use it when the io_context outlives the task.
-    Breaking: the owning `ldap::run(task)` is gone (`run(f, args...)`
-    replaces it). Not to be called from a thread already running `ioc`. `ldap::run` is a function
+    Not to be called from a thread already running `ioc`. `ldap::run` is a function
     object, so argument-dependent lookup does not find it: a caller's own
     unqualified `run(ioc, task)` helper stays unambiguous.
 
@@ -652,7 +642,7 @@ itself needs only ICU.
   task's own executor. `is_open()`, `outstanding()`, `is_tls()`,
   `security_layer()` and `bind_count()` are snapshots, safe on any thread;
   a second concurrent `next()` on a stream fails with
-  `operation_in_progress`. Breaking: `close()` and the destructors of
+  `operation_in_progress`. `close()` and the destructors of
   `connection`, `search_stream`, `paged_search` and `transaction`, called
   off the strand (from another thread, or a task of the plain io_context
   executor), post their work: `close()` takes effect when the io_context
@@ -694,13 +684,11 @@ itself needs only ICU.
   `std::vector<std::string>`, like `partial_attribute(type, values)`),
   `del`, `modify_dn`
   (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,
-  .new_superior}`; breaking (coro-ldap-aw4.3): `move()` and `rename()`
-  are gone from `connection`, `client` and the sync facades), `compare`
+  .new_superior}`), `compare`
   (`result<compare_result>`: `value` true / false for compareTrue /
   compareFalse, the response's `matched_dn`, `diagnostic_message` and
   `controls`, and an empty chase report (`referrals`, `unlisted`) where
-  nothing chases; breaking: it returned `result<bool>` on `connection`,
-  the leases and `sync::connection`) and `extended`, each taking a params aggregate
+  nothing chases) and `extended`, each taking a params aggregate
   with `.controls` (that operation's control list, see controls.hpp
   below) and `.timeout` (`extended` refuses the StartTLS name with
   encode_error before sending: use `start_tls`);
@@ -721,8 +709,7 @@ itself needs only ICU.
   one transaction per connection does not refuse the next one as busy.
   The static `ldap::transaction::begin(connection &, extended_controls = {})`
   -> `task<result<transaction>>` sends Start Transaction and returns the
-  started helper `ldap::transaction` (move-only; it replaced
-  `connection::begin_transaction()`, removed):
+  started helper `ldap::transaction` (move-only):
   `add` / `modify` / `del` / `modify_dn` attach the control (a request that
   already carries one, typed or raw, or carries proxied authorization,
   fails with encode_error before sending), `commit()` ->
@@ -734,11 +721,9 @@ itself needs only ICU.
   leaves it open (await every update first). One destroyed while the server
   may still hold it (open, or a commit / abort whose End Transaction got no
   answer: stopped before sending, or given up on) queues an End
-  Transaction (abort) without waiting. Breaking (coro-ldap-bhe.13):
-  `connection::start_transaction` / `end_transaction` and their
-  `sync::connection` / sync lease forwarders are gone: call the
-  non-members (`ldap::sync::run(c, [](ldap::connection &a) { return
-  ldap::start_transaction(a); })` from a sync facade). The static
+  Transaction (abort) without waiting. From a sync facade, call the
+  non-members with `ldap::sync::run(c, [](ldap::connection &a) { return
+  ldap::start_transaction(a); })`. The static
   `sync::transaction::begin(sync::connection &, extended_controls = {})`
   (and `begin(sync::basic_lease<E> &, ...)` for a lease) returns a
   `result<sync::transaction>`, which aborts synchronously when destroyed
@@ -785,12 +770,7 @@ itself needs only ICU.
   `std::errc::value_too_large`). The names are the same in every layer:
   `search_paged` collects every page (`ldap::`, `sync::`, both
   repositories), `search_paged_stream` streams them (async only); the
-  arguments are the search, then the page size, then the rest. Breaking
-  (coro-ldap-bhe.5): `ldap::search_paged` was the stream, now
-  `ldap::search_paged_stream`; `repository::search_paged(page_size,
-  filter, scope)` was the stream, now `search_paged_stream(filter,
-  page_size, scope)`, and `search_paged(filter, page_size, scope)` collects
-  (also the order of the blocking repository's `search_paged`).
+  arguments are the search, then the page size, then the rest.
 - `jhetz/ldap/referral_chase.hpp`: opt-in referral chasing.
   `co_await ldap::chase_search(conn, params, connector, policy, mr)` runs
   the search, then follows a referral result and the continuation
@@ -827,9 +807,9 @@ itself needs only ICU.
   (cancelled when the budget is spent). Loops
   (the same server, DN, scope and filter, the origin's own request
   included) are skipped. Writes are never chased.
-  `make_same_policy_connector(ioc, origin, options, allowed_hosts, setup)`
+  `make_same_policy_connector(ioc, origin, options, allowed_host_suffixes, setup)`
   builds a connector keeping the origin's policy: ldapi:// and hosts
-  outside `allowed_hosts` (a name and its subdomains, IDNs in ASCII form;
+  outside `allowed_host_suffixes` (a name and its subdomains, IDNs in ASCII form;
   IP addresses exactly; empty by default, so nothing is followed), hosts
   with bytes no host name has, and ports other than the scheme's default
   and the origin's (unless an entry names it: `host:port`, `[::1]:port`;
@@ -867,13 +847,8 @@ itself needs only ICU.
   `sync_extended_operations.hpp`: the same
   four, blocking, over `sync::connection`, `sync::client` and the sync
   leases (`sync::directory`), each running the async one with
-  `sync::run` (coro-ldap-aw4.5; breaking: `sync::extended_directory` is
-  gone). Breaking: the members `who_am_i`, `password_modify`,
-  `change_password` and `reset_password` are gone from `connection`
-  and the sync facades, and `client::who_am_i` /
-  `sync::client::who_am_i` with them (`client::extended` replaces them,
-  retried only after `not_sent`, so a Who am I? on a client is no longer
-  retried after a lost connection). The raw transaction operations
+  `sync::run`. On a client they run over `client::extended`, retried only
+  after `not_sent`. The raw transaction operations
   (`ldap::start_transaction`, `ldap::end_transaction`) stay dedicated
   functions: a refused End Transaction's txnEndRes does not reach the
   public `extended()`. Active Directory
@@ -1241,17 +1216,14 @@ itself needs only ICU.
   `ldap::ad::read_all_values`),
   `to_attributes(value)`, typed changes `replace / add / remove<&T::m>(v)`,
   typed filters `filters::field<&T::m>() == v`; the I/O is `ldap::repository`
-  (repository.hpp, below). Breaking (coro-ldap-2cx.2): `connection::search_as<T>`,
-  `modify<T>(dn, changes)` and `add(dn, value)`, their sync copies and
-  `connection_options::schema_check` are gone. Breaking
-  (coro-ldap-2cx.2.1): connection.hpp (and so sync.hpp and client.hpp)
-  no longer includes directory.hpp, mapping.hpp and schema.hpp: include
+  (repository.hpp, below). connection.hpp (and so sync.hpp and client.hpp)
+  does not include directory.hpp, mapping.hpp and schema.hpp: include
   jhetz/ldap/directory.hpp for `load_schema`, mapping.hpp and schema.hpp
   for the typed mapping (`decode<T>`, `ldap::schema<T>`, `describe`,
   `validate<T>`), repository.hpp for `ldap::repository`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
-  compile; `tests/compile/` checks each. Encoding can fail (breaking
-  change, coro-ldap-vcp): `value_traits<T>::encode` returns `std::string`
+  compile; `tests/compile/` checks each. Encoding can fail:
+  `value_traits<T>::encode` returns `std::string`
   or `result<std::string>` (`detail::encode_value` takes both); the
   string traits reject ill-formed UTF-8, enums a value without a name and
   `sys_seconds` a year outside 0000-9999, all as `encode_error`.
@@ -1260,9 +1232,7 @@ itself needs only ICU.
   error before sending anything, and a typed filter on such a value is
   `filter::failed()` with that error (context `filter uid: not valid
   UTF-8 (ill-formed sequence at offset 1)`), which a repository's search
-  and the encoder return before sending. Breaking (coro-ldap-bhe.8): such
-  a search now fails with `encode_error`, not `invalid_filter` (`filter:
-  empty`).
+  and the encoder return before sending, as `encode_error`.
 
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
   RFC 4512 parser for the subschema's attributeTypes / objectClasses /
@@ -1298,10 +1268,9 @@ itself needs only ICU.
   4512 4.1.6; `parse_dit_content_rule`,
   `server_schema::find_dit_content_rule(class_oid)`); the free
   `ldap::load_schema` (which reads dITContentRules too) (directory.hpp) and
-  `repository_options::schema_check = schema_check::on_first_use`. Breaking
-  (coro-ldap-aw4.1): `connection::load_schema()` is gone, and with it the
-  connection's schema cache.
-  Breaking: a `std::string` or `std::pmr::string` member on a binary
+  `repository_options::schema_check = schema_check::on_first_use`; a
+  connection keeps no schema cache.
+  A `std::string` or `std::pmr::string` member on a binary
   syntax (Octet String, JPEG, Fax, Certificate, Certificate List,
   Certificate Pair, Audio, Binary; see `value_rejected_syntaxes`) is a
   `syntax_mismatch`: map userPassword and the like to `ldap::binary`.
@@ -1323,11 +1292,8 @@ itself needs only ICU.
   ldap::named_by<&person::uid>, repository_options{.schema_check})`, the
   struct and the source type deduced (`repository<&person::uid,
   ldap::client>`); one repository may be used from several threads (its
-  schema-check outcome is behind a lock). Breaking: `ldap::store`,
-  `sync::store`, `store_options`, store.hpp and sync_store.hpp are now
-  `ldap::repository`, `sync::repository`, `repository_options`,
-  repository.hpp and sync_repository.hpp, with no alias (a repository
-  keeps no entries: each call is one request). The naming member must be in
+  schema-check outcome is behind a lock). A repository keeps no entries:
+  each call is one request. The naming member must be in
   `schema<T>`, required, single-valued and writable (static_assert).
   `dn_of(key)`
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
@@ -1427,10 +1393,9 @@ itself needs only ICU.
   the I/O thread. The streams `search_stream` and `search_paged_stream`
   are async only; `search_paged` collects every page in both modes.
   `repository_source` is the concept of the sources (`ldap::directory` or
-  a blocking facade). Breaking (coro-ldap-3jj.5): `sync::repository` is
-  removed (use `ldap::repository` over the facade), and its parameters
-  are by value as the async ones (`update(record<T>, T, controls)`
-  included).
+  a blocking facade); over a facade, `ldap::repository` takes its
+  parameters by value as over an async source (`update(record<T>, T,
+  controls)` included).
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
@@ -1480,10 +1445,7 @@ itself needs only ICU.
   (`sync::connection`, `sync::lease`, `sync::exclusive_lease`,
   `sync::client`); the blocking conveniences (`sync::who_am_i`,
   `sync::search_paged`, `sync::load_schema`, `ldap::repository`,
-  `ad::change_password`, ...) are written over it. Breaking:
-  `sync::directory` was a structural concept (blocking `search`, `add`,
-  ...), and `sync::search_paged(client &)` and `sync::load_schema(client
-  &)` are no longer separate overloads.
+  `ad::change_password`, ...) are written over it.
   Callable from any number of threads; a call from its own I/O
   thread fails with `client_errc::would_deadlock`. Exceptions thrown by
   an operation are rethrown in the calling thread. The last handle's
@@ -1516,12 +1478,11 @@ itself needs only ICU.
   `acquire() ->
   task<result<lease>>`, the lease giving the pooled `connection`
   (`(*lease)->search(...)`), shared with other leases on the same
-  connection (coro-ldap-tfn: `shared_connection` is gone; `simple_bind`,
-  `sasl_bind`, `start_tls`, `unbind` and `close` through a shared lease
-  change the session for every lease sharing it); `acquire_exclusive() -> task<result<exclusive_lease>>`, the
+  connection (`simple_bind`, `sasl_bind`, `start_tls`, `unbind` and
+  `close` through a shared lease change the session for every lease
+  sharing it); `acquire_exclusive() -> task<result<exclusive_lease>>`, the
   full `connection` on an idle or new connection nobody else uses while it
-  is held (for binds, `start_tls()`, `unbind()`). Breaking:
-  `acquire_options` is gone. A lease returns the connection when destroyed
+  is held (for binds, `start_tls()`, `unbind()`). A lease returns the connection when destroyed
   or `release()`d. `max_connections` must be at least 1: 0 makes every
   `acquire()` and `acquire_exclusive()` fail with
   `std::errc::invalid_argument`. `acquire()` waits at most
@@ -1637,10 +1598,6 @@ itself needs only ICU.
   io_context, `close()`, the destructor and a lease's release have the
   temporary precondition of the connection.hpp entry's "Threading" above
   (no thread still inside `run()`).
-  Breaking (coro-ldap-bhe.7): the test hooks `detail::set_jitter`,
-  `detail::set_connector` (client.hpp) and `detail::set_next_message_id`
-  (connection.hpp) left the public headers for `detail::test_access` in
-  src/test_access.hpp (not installed).
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
   over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session
@@ -1672,9 +1629,7 @@ itself needs only ICU.
   failed, was stopped with no BindRequest outstanding or did not complete
   (RFC 4511 section 4.2.1), so it was never sent; the context quotes the
   bind's error. It matches
-  `cond::auth_failed`. A behaviour change: such requests used to be sent
-  after the failed bind, anonymously and without the bind's security
-  layer. If the failure closed the connection (also a bind stopped while
+  `cond::auth_failed`. If the failure closed the connection (also a bind stopped while
   its BindRequest is outstanding) they fail with `not_sent`.
 - `client_errc::not_sent`: the operation failed before the connection's
   writer took its request (the connection closed while the request was
@@ -1685,10 +1640,10 @@ itself needs only ICU.
   `unbind()`, a default-constructed or moved-from connection) are in the
   connection.hpp entry above. It matches `cond::connection_lost`, like
   `not_connected`.
-  A behaviour change: a request held behind a bind when a Notice of
-  Disconnection (or any failure) closes the connection now fails with
-  `not_sent` (`cond::connection_lost`), no longer with the notice's own
-  code (`unavailable` or `busy`: `cond::busy_or_unavailable`).
+  A request held behind a bind when a Notice of Disconnection (or any
+  failure) closes the connection fails with `not_sent`
+  (`cond::connection_lost`), not with the notice's own code
+  (`unavailable` or `busy`).
 - `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary
   `jhetz-ldapsearch`, option `JHETZ_LDAP_BUILD_EXAMPLES`): connect,
   StartTLS (`-Z`), simple bind (`-D dn -w pw`) or SASL EXTERNAL
@@ -1997,11 +1952,7 @@ assignment that keeps the target's resource (also for their `std::optional`
 and `std::variant` members). The request operations (`bind_request`,
 `search_request`, `add_request`, ..., `attribute_value_assertion`,
 `modify_change`, `end_transaction_request`) are plain values on the default
-resource: they are built once per operation, never bulk-decoded. Breaking
-(coro-ldap-3jj.2): their `allocator_type`, allocator constructors,
-allocator-extended copy and move constructors, `get_allocator()` and
-trailing allocator parameters are gone, and so is the `mr` parameter of
-`testing::decode_end_transaction_request`. Parsing and decoding take the resource:
+resource: they are built once per operation, never bulk-decoded. Parsing and decoding take the resource:
 `decode_options::memory`, `filter::raw(text, mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
 `url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
 `read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.

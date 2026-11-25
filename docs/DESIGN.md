@@ -3483,12 +3483,12 @@ and read through `detail::lease_access`.
   (`chase_result::origin_failed`); a referred server's failure (busy
   there, a lost referred connection) or the chase's is returned as is,
   and the pooled connection is not retired for it (it answered). Writes:
-  no `follow_writes` in v1. The client has no write forwarders (writes
-  run on leases, whose `connection` returns a referral result as is), so
-  a switch would have nothing to apply to; a referral result means the
-  update was not performed (RFC 4511 4.1.10), and `referral_target(url,
-  add_params ...)` builds the request for a caller who decides to resend
-  it. `search_stream()` and `extended()` never chase: a stream hands its
+  no `follow_writes` in v1. The client's write forwarders (`add`,
+  `modify`, `del`, `modify_dn`, also `sync::client`'s) run each write on a
+  lease, whose `connection` returns a referral result as is: a referral
+  result means the update was not performed (RFC 4511 4.1.10), and
+  resending it elsewhere is the caller's decision, with
+  `referral_target(url, add_params ...)` building the request. `search_stream()` and `extended()` never chase: a stream hands its
   references out as they come, and merging chased entries into it would
   change what `next()` means. `client_observer::on_referral(server,
   attempt)` is called for each attempt as it is decided (also beyond
