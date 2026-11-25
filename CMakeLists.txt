@@ -410,9 +410,9 @@ if(JHETZ_LDAP_INSTALL)
         DESTINATION ${jhetz_ldap_cmakedir})
 endif()
 
-# The server-side codec (testing/), not installed.
+# The server-side codec (tests/support/), not installed.
 if(JHETZ_LDAP_BUILD_TESTS OR JHETZ_LDAP_BUILD_FUZZERS)
-    add_subdirectory(testing)
+    add_subdirectory(tests/support)
 endif()
 
 if(JHETZ_LDAP_BUILD_TESTS)
@@ -421,5 +421,5 @@ if(JHETZ_LDAP_BUILD_TESTS)
 endif()
 
 if(JHETZ_LDAP_BUILD_FUZZERS)
-    add_subdirectory(fuzz)
+    add_subdirectory(tests/fuzz)
 endif()

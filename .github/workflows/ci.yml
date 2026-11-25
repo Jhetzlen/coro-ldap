@@ -10,9 +10,7 @@ on:
       - "cmake/**"
       - "include/**"
       - "src/**"
-      - "testing/**"
       - "tests/**"
-      - "fuzz/**"
       - "examples/**"
       - ".github/workflows/ci.yml"
       - ".github/badges.py"
@@ -23,9 +21,7 @@ on:
       - "cmake/**"
       - "include/**"
       - "src/**"
-      - "testing/**"
       - "tests/**"
-      - "fuzz/**"
       - "examples/**"
       - ".github/workflows/ci.yml"
       - ".github/badges.py"
@@ -75,7 +71,7 @@ jobs:
         run: apt-get update && apt-get install -y git ca-certificates clang-format-23
       - uses: actions/checkout@v5
       - name: Check formatting
-        run: find include src testing tests fuzz examples -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
+        run: find include src tests examples -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
 
   gcc-sanitize:
     name: GCC 16 Debug (ASan + UBSan)
@@ -264,7 +260,7 @@ jobs:
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
         run: cmake --build build
-      # Every target in fuzz/CMakeLists.txt.
+      # Every target in tests/fuzz/CMakeLists.txt.
       - name: Run each fuzzer for 60 s
         shell: bash
         run: |
@@ -273,10 +269,10 @@ jobs:
             name=$(basename "$fuzzer")
             mkdir -p "corpus/$name" "artifacts/$name"
             # Seed with the checked-in corpus (same seeds as <name>_replay).
-            if [ -d "fuzz/corpus/$name" ]; then cp -f fuzz/corpus/$name/* "corpus/$name/"; fi
-            # A dictionary, where there is one (fuzz/<name>.dict).
+            if [ -d "tests/fuzz/corpus/$name" ]; then cp -f tests/fuzz/corpus/$name/* "corpus/$name/"; fi
+            # A dictionary, where there is one (tests/fuzz/<name>.dict).
             dict=()
-            if [ -f "fuzz/$name.dict" ]; then dict=(-dict="fuzz/$name.dict"); fi
+            if [ -f "tests/fuzz/$name.dict" ]; then dict=(-dict="tests/fuzz/$name.dict"); fi
             echo "::group::$name"
             "$fuzzer" -max_total_time=60 -print_final_stats=1 "${dict[@]}" \
               -artifact_prefix="artifacts/$name/" "corpus/$name"

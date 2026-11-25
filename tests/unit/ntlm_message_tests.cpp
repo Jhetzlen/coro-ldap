@@ -1,6 +1,6 @@
 // The MS-NLMP messages: MD4, UTF-16LE forms, the CHALLENGE_MESSAGE parser,
 // and the NEGOTIATE and AUTHENTICATE encoders.
-#include "../src/ntlm_message.hpp"
+#include "../../src/ntlm_message.hpp"
 #include "jhetz/ldap/testing/server_codec.hpp"
 #include "test_util.hpp"
 

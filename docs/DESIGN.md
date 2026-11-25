@@ -1702,7 +1702,7 @@ pointer passed as an argument is a runtime value, so "not in the descriptor"
 and "read_only" could not be compile errors.
 
 Compile-time guarantees (all implemented, each with a compile test in
-`tests/compile/`):
+`tests/unit/compile/`):
 - the attribute list and names come only from the descriptor, and names
   are validated (`field<&T::m>("not valid!")` does not compile);
 - every field of a descriptor belongs to the same struct;
@@ -3117,11 +3117,11 @@ client and the mock servers.
   search filters; the client libraries have no request decoder at all.
   Depth and element limits are options.
 - The server side of the codec is a separate, never installed library:
-  `testing/` builds `jhetz::ldap_testing` (over `jhetz::ldap_core`) and
+  `tests/support/` builds `jhetz::ldap_testing` (over `jhetz::ldap_core`) and
   `jhetz::ldap_testing_net` (adds `testing::read_message`, over
   `jhetz::ldap`), only with the tests or fuzzers, which
   link them, as do the mock servers. Namespace `ldap::testing`, headers in
-  `testing/include/jhetz/ldap/testing/`: `testing::decode(bytes,
+  `tests/support/include/jhetz/ldap/testing/`: `testing::decode(bytes,
   testing::decode_options)` with `from = origin::any / server / client`
   (default `any`, for round trips) and the filter limits;
   `decode_filter`; the response controls a server writes (sort result, VLV
@@ -3658,7 +3658,7 @@ both spellings are read). `sid` and `guid` accept Octet String in
 `validate<T>`, `user_account_control` INTEGER. `sid::parse` also takes a
 SID without sub-authorities ("S-1-0"), which MS-DTYP's ABNF does not
 list but the binary form can hold, so every value round-trips. Tested
-with MS-DTYP and .NET vectors (`tests/ad_types_tests.cpp`) and on Samba
+with MS-DTYP and .NET vectors (`tests/unit/ad_types_tests.cpp`) and on Samba
 (`integration.samba_ad`: Administrator's RID 500 under the domain SID,
 lookups by typed objectSid and objectGUID filters, a new user's
 userAccountControl written back).
@@ -3669,7 +3669,7 @@ extensible matches on LDAP_MATCHING_RULE_BIT_AND and BIT_OR (MS-ADTS
 `user_account_control` or an integer. The value is written by the type's
 `value_traits`, so bit 31 of a `user_account_control` is AD's signed
 decimal, and the rule OIDs are named constants. Tested byte for byte
-(`tests/ad_types_tests.cpp`) and on Samba (`integration.samba_ad`: a
+(`tests/unit/ad_types_tests.cpp`) and on Samba (`integration.samba_ad`: a
 disabled user found by BIT_AND and BIT_OR, not found negated).
 
 Controls: AD's request controls are types in `ldap::ad` that convert
@@ -3681,7 +3681,7 @@ has no value and is critical by default, as System.DirectoryServices.
 Protocols' ShowDeletedControl: on a server that does not know it the
 search fails (unavailable_critical_extension) rather than silently
 leaving deleted objects out. Tested by its encoding
-(`tests/ad_controls_tests.cpp`) and on Samba (a user added, deleted, then
+(`tests/unit/ad_controls_tests.cpp`) and on Samba (a user added, deleted, then
 found by its objectGUID with the control, under CN=Deleted Objects with
 isDeleted TRUE, and not without it).
 
@@ -3833,7 +3833,7 @@ starts again from the caller's cookie after `connection_lost`,
 discarding what it collected and resetting the count of rounds; the
 blocking form is in `ad/sync.hpp`. Samba never sets MoreResults
 (source4 dirsync.c), so the multi-round paths are tested on the mock
-only. Tested by its encoding (`tests/ad_controls_tests.cpp`, including
+only. Tested by its encoding (`tests/unit/ad_controls_tests.cpp`, including
 unsigned Flags and malformed values), against the mock
 (`tests/net/ad_dirsync_tests.cpp`: cookies chained through MoreResults,
 cycles of cookies, `max_rounds` reached and resumed, 0 refused, refused
@@ -3859,7 +3859,7 @@ streams, and no `client &` overload: `client::search_stream` returns at
 the first message, here the first change, so a caller holds a lease and
 streams on it. AD's limits (base or one-level scope,
 MaxNotificationPerConn, 5) are the server's to enforce. Tested by the
-control and builder (`tests/ad_controls_tests.cpp`), against the mock
+control and builder (`tests/unit/ad_controls_tests.cpp`), against the mock
 (`tests/net/ad_notification_tests.cpp`: changes after the operation
 timeout, the AbandonRequest when the stream is destroyed) and on Samba,
 which supports it (`integration.samba_ad`: two description changes on

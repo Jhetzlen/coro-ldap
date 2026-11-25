@@ -1,7 +1,7 @@
 # clang-tidy configuration for coro-ldap (docs/DEVELOPMENT.md, "clang-tidy").
 # Run through -DJHETZ_LDAP_CLANG_TIDY=ON (our own targets only) or
-# run-clang-tidy over build/tidy/compile_commands.json. tests/.clang-tidy and
-# fuzz/.clang-tidy inherit this file and turn off test-only noise.
+# run-clang-tidy over build/tidy/compile_commands.json. tests/.clang-tidy
+# turns off test-only noise; tests/fuzz/ and tests/support/ turn it back on.
 #
 # Every disabled check has its reason on the line above it.
 Checks:
@@ -66,7 +66,7 @@ Checks:
 # positive with its reason).
 WarningsAsErrors: '*'
 # Our own headers only: never Corosio, Capy, Catch2 or the system headers.
-HeaderFilterRegex: '.*/(include/jhetz|src|tests|fuzz)/.*'
+HeaderFilterRegex: '.*/(include/jhetz|src|tests)/.*'
 ExcludeHeaderFilterRegex: '.*/_deps/.*'
 # The dependencies are SYSTEM includes, but a static-analyzer report whose
 # path starts in our code is kept even when its final location is in their

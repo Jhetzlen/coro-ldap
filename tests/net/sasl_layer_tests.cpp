@@ -2,7 +2,7 @@
 // and sasl_bind installing the layer after the successful BindResponse.
 #include "../../src/connection/referral_chase_impl.hpp"
 #include "../../src/net/sasl_layer.hpp"
-#include "../counting_resource.hpp"
+#include "../unit/counting_resource.hpp"
 #include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/connect.hpp"

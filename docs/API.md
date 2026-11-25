@@ -101,7 +101,7 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   byte-identical. The server-side control and value codecs
   (`encode_sort_result`, `encode_vlv_response`, `encode_read_entry`,
   `decode_sync_request`, `encode_sync_*`, `ad::decode_dirsync_request`,
-  ...) and `decode_filter` are `ldap::testing`'s (testing/include/, not
+  ...) and `decode_filter` are `ldap::testing`'s (tests/support/include/, not
   installed).
   `decode_options` limits the reader depth and the decoded strings;
   `memory` is the resource everything decoded is allocated from. The
@@ -1257,7 +1257,7 @@ itself needs only ICU.
   for the typed mapping (`decode<T>`, `ldap::schema<T>`, `describe`,
   `validate<T>`), repository.hpp for `ldap::repository`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
-  compile; `tests/compile/` checks each. Encoding can fail:
+  compile; `tests/unit/compile/` checks each. Encoding can fail:
   `value_traits<T>::encode` returns `std::string`
   or `result<std::string>` (`detail::encode_value` takes both); the
   string traits reject ill-formed UTF-8, enums a value without a name and
@@ -2015,7 +2015,7 @@ unless a resource is given.
   sample response (a large entry included), and a builder-made filter plus
   `encode` only from the resource given, with a counting resource and with a
   `monotonic_buffer_resource` over a fixed buffer with a null upstream while
-  the default resource is `null_memory_resource()` (`tests/pmr_tests.cpp`).
+  the default resource is `null_memory_resource()` (`tests/unit/pmr_tests.cpp`).
 - `tls_options` is a plain aggregate (configuration, not a hot path).
 - String types: a call taking a `memory_resource *` returns `std::pmr`
   strings on it; members of allocator-aware types (entry values,

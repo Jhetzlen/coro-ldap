@@ -1,7 +1,7 @@
 // ldap::client against scripted in-process servers (the n-th script on the
 // n-th connection), with the jitter fixed.
 #include "../../src/test_access.hpp"
-#include "../counting_resource.hpp"
+#include "../unit/counting_resource.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/dirsync.hpp"
 #include "jhetz/ldap/ad/ranged_values.hpp"

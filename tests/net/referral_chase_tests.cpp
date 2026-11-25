@@ -1,7 +1,7 @@
 // chase_search and chase_compare against several scripted in-process
 // servers, with a test connector mapping a URL's host to one of them.
 #include "../../src/connection/referral_chase_impl.hpp"
-#include "../counting_resource.hpp"
+#include "../unit/counting_resource.hpp"
 #include "jhetz/ldap/referral_chase.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"

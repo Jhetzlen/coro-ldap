@@ -1,7 +1,7 @@
 // ldap::sync::connection against an in-process LDAP server on loopback TCP that
 // runs on its own thread and io_context and answers requests as they come.
 #include "../../src/net/tls.hpp"
-#include "../counting_resource.hpp"
+#include "../unit/counting_resource.hpp"
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/sasl.hpp"

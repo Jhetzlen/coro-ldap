@@ -3,7 +3,7 @@
 // Not part of the installed library.
 #pragma once
 
-#include "../../../../../src/ntlm_message.hpp"
+#include "../../../../../../src/ntlm_message.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/content_sync.hpp"

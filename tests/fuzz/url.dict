@@ -1,4 +1,4 @@
-# libFuzzer dictionary for url_fuzz (-dict=fuzz/url.dict).
+# libFuzzer dictionary for url_fuzz (-dict=tests/fuzz/url.dict).
 "ldap://"
 "ldaps://"
 "ldapi://"

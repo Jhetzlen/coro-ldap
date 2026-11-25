@@ -42,7 +42,7 @@ for the codec's headers, against `jhetz::ldap_core` alone, so a codec header tha
 needs Corosio or Capy fails, and `jhetz_ldap_client_header_check` for the
 others; the list of `jhetz::ldap` headers is in `tests/CMakeLists.txt`).
 
-The server side of the codec is not in the client libraries: `testing/`
+The server side of the codec is not in the client libraries: `tests/support/`
 builds `jhetz::ldap_testing` (request decoding with `testing::decode` and
 `testing::decode_filter`, the request controls a server reads, the response
 controls it writes, NTLM's CHALLENGE_MESSAGE encoder and
@@ -51,7 +51,7 @@ AUTHENTICATE_MESSAGE parser; over `jhetz::ldap_core`) and, with
 over `jhetz::ldap`), only when the tests or fuzzers are
 built, and never installs them (DESIGN.md section 10). The tests, the
 fuzz targets and the mock servers (`tests/net/mock_ldap.hpp`)
-link them; their headers are under `testing/include/jhetz/ldap/testing/`,
+link them; their headers are under `tests/support/include/jhetz/ldap/testing/`,
 and they include the shared internal headers of `src/`.
 
 | Option | Default | |
@@ -114,14 +114,14 @@ for p in extra/any/mingw-w64-headers extra/any/mingw-w64-winpthreads extra/x86_6
 done
 ln -sfn /usr/include/openssl $M/deps/openssl; ln -sfn /usr/include/unicode $M/deps/unicode
 I=$M/root/usr/x86_64-w64-mingw32/include; C=$I/c++/$(ls $I/c++ | tail -1); D=$PWD/build/main/_deps
-for f in $(ls src/*.cpp src/*/*.cpp testing/src/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp \
+for f in $(ls src/*.cpp src/*/*.cpp tests/support/src/*.cpp tests/unit/*.cpp tests/net/*.cpp examples/*.cpp tests/fuzz/*_replay.cpp \
            | grep -v -e trust_store_default -e sasl_gssapi_gss); do
   clang++ --target=x86_64-w64-mingw32 -std=c++23 -fsyntax-only -nostdinc++ -nostdlibinc \
     -isystem $C -isystem $C/x86_64-w64-mingw32 -isystem $C/backward -isystem $I -isystem $M/deps \
     -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DCERT_CHAIN_PARA_HAS_EXTRA_FIELDS -DSECURITY_WIN32 \
     -DBOOST_CAPY_NO_LIB -DBOOST_CAPY_STATIC_LINK -DBOOST_COROSIO_HAS_OPENSSL \
     -DBOOST_COROSIO_NO_LIB -DBOOST_COROSIO_STATIC_LINK -DJHETZ_LDAPSEARCH='"jhetz-ldapsearch.exe"' \
-    -Iinclude -Itesting/include -Isrc -isystem $D/corosio-src/include -isystem $D/capy-src/include \
+    -Iinclude -Itests/support/include -Isrc -isystem $D/corosio-src/include -isystem $D/capy-src/include \
     -isystem $D/catch2-src/src -isystem $D/catch2-build/generated-includes \
     -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wno-c2y-extensions $f || echo "FAIL $f"
 done
@@ -885,8 +885,10 @@ mock servers and direct mechanism calls.
 ## clang-tidy
 
 The checks are in `.clang-tidy` (each disabled check has its reason there);
-`tests/.clang-tidy` and `fuzz/.clang-tidy` inherit it and turn off test-only
-noise. The header filter keeps the reports to our own headers (never Corosio,
+`tests/.clang-tidy` inherits it and turns off test-only noise for everything
+under `tests/`, except that `tests/support/.clang-tidy` and
+`tests/fuzz/.clang-tidy` turn those checks back on (the fuzz targets keep
+literal numbers). The header filter keeps the reports to our own headers (never Corosio,
 Capy, Catch2), and the dependencies are SYSTEM includes. Static-analyzer
 reports are placed in the main file (`report-in-main-source-file`, set through
 `ExtraArgs`), so one whose path ends in a dependency header lands on our call
@@ -898,7 +900,7 @@ site, where a NOLINT can silence it. Use Clang for the build directory, with GSS
 cmake -B build/tidy -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug \
   -DJHETZ_LDAP_WITH_GSSAPI=ON
 cmake --build build/tidy -j8      # once, for the generated files and the dependencies
-run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|testing|tests|examples|fuzz)/.*'
+run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|tests|examples)/.*'
 ```
 
 The fuzz targets are checked through their `*_fuzz_replay` builds. A full
@@ -913,7 +915,7 @@ cmake --build build/tidy-werror -j6
 ```
 
 The tree is clean: `.clang-tidy` sets `WarningsAsErrors: '*'` (inherited by
-`tests/.clang-tidy` and `fuzz/.clang-tidy`), so every
+the `.clang-tidy` files under `tests/`), so every
 finding is an error,
 run-clang-tidy exits non-zero on one and a `-DJHETZ_LDAP_CLANG_TIDY=ON`
 build fails on it. The default build (option `OFF`) does not run
@@ -938,14 +940,14 @@ disabled check.
 cmake -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DCMAKE_CXX_COMPILER=clang++ -DJHETZ_LDAP_BUILD_FUZZERS=ON -DJHETZ_LDAP_BUILD_TESTS=OFF
 cmake --build build/fuzz
-mkdir -p corpus && cp fuzz/corpus/message_fuzz/* corpus/
+mkdir -p corpus && cp tests/fuzz/corpus/message_fuzz/* corpus/
 UBSAN_OPTIONS=halt_on_error=1 build/fuzz/fuzzers/message_fuzz -max_total_time=60 corpus
-# url_fuzz has a dictionary: add -dict=fuzz/url.dict
+# url_fuzz has a dictionary: add -dict=tests/fuzz/url.dict
 ```
 
-`fuzz/corpus/<target>/` holds the seed inputs (the same ones
+`tests/fuzz/corpus/<target>/` holds the seed inputs (the same ones
 `<target>_replay` mutates). Regenerate them after changing the seeds with
-`<target>_replay --write-seeds fuzz/corpus/<target>`.
+`<target>_replay --write-seeds tests/fuzz/corpus/<target>`.
 
 Sanitized and fuzz builds use `-fno-sanitize-recover=all`, so any UBSan
 finding aborts and fails the test or fuzz run.
@@ -984,7 +986,7 @@ tests/integration/run_openldap.sh build/tsan/tests/jhetz_ldap_integration_tests 
 
 ## Golden vectors
 
-`tests/message_golden_tests.cpp` compares the codec with encodings produced
+`tests/unit/message_golden_tests.cpp` compares the codec with encodings produced
 by an independent implementation (ldap3 2.9.1 / pyasn1 0.6.4); the generating
 script is in the file. The NTLMv2 golden NEGOTIATE, CHALLENGE and
 AUTHENTICATE messages of `tests/net/sasl_ntlm_tests.cpp` come from

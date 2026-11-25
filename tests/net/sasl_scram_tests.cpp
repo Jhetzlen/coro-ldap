@@ -1,6 +1,6 @@
 // SCRAM-SHA-256 driven directly: the RFC 7677 vector, input preparation and
 // the rejections.
-#include "../test_util.hpp"
+#include "../unit/test_util.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
 #include "scram_test_access.hpp"
 

@@ -1,9 +1,0 @@
-# Fuzz targets and their replay mains: the root .clang-tidy, except that an
-# exception escaping a replay main is the finding (a crash), as in libFuzzer.
-InheritParentConfig: true
-CheckOptions:
-  bugprone-exception-escape.CheckMain: false
-Checks:
-  # Test vectors and sizes are the point of a replay or a fuzz target.
-  - -cppcoreguidelines-avoid-magic-numbers
-  - -readability-magic-numbers

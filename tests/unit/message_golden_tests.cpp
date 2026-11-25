@@ -256,7 +256,7 @@ TEST_CASE("golden: unsolicited notice of disconnection", "[message][golden]")
 /* Generating script (ldap3 2.9.1, pyasn1 0.6.4):
 
 # Produces reference LDAPMessage encodings with ldap3 2.9.1 / pyasn1 (independent
-# implementation) for tests/message_golden_tests.cpp.
+# implementation) for tests/unit/message_golden_tests.cpp.
 from ldap3 import SIMPLE, SASL
 from ldap3.operation.bind import bind_operation
 from ldap3.operation.search import search_operation

@@ -1,8 +1,8 @@
 // ldap::connection against a scripted in-process LDAP server
 // (mock_ldap.hpp), and once over loopback TCP.
 #include "../../src/test_access.hpp"
-#include "../counting_resource.hpp"
-#include "../value_semantics.hpp"
+#include "../unit/counting_resource.hpp"
+#include "../unit/value_semantics.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/extended_operations.hpp"

@@ -73,7 +73,7 @@ ctest --test-dir build/main -j12        # serial ctest is ~4x slower (fuzz repla
 tests/integration/run_openldap.sh ctest --test-dir build/main -L integration --output-on-failure
 
 # clang-tidy 23 (.clang-tidy; build/tidy is a Clang build dir, see docs/DEVELOPMENT.md "clang-tidy"):
-run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|testing|tests|examples|fuzz)/.*'
+run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|tests|examples)/.*'
 
 # Formatting: clang-format 23, same as CI
 /usr/bin/clang-format -i <files>
@@ -90,7 +90,7 @@ coro-ldap is a C++23 LDAP client library with three CMake targets (the C++ names
 - **`jhetz::ldap_ad`**: the Active Directory helpers over the client's public API (`include/jhetz/ldap/ad/`, `src/ad/`).
 - **`ldap::sync::connection`** (`sync.hpp`, in `jhetz::ldap`): a blocking facade over the async connection.
 
-Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/connection/` for the connection modules, `src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), `testing/` for the server-side codec used by the tests and fuzzers (not installed), `fuzz/`, `examples/`, `packaging/` for the vcpkg ports and Conan recipes, and `versions/` for the vcpkg registry versions. The design notes are in `docs/DESIGN.md`.
+Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/connection/` for the connection modules, `src/net/` for transport and TLS), `tests/` for all test code (`tests/unit/` for the Catch2 unit tests, `tests/net/` for in-process network tests, `tests/integration/` for slapd, `tests/fuzz/` for the fuzz targets, `tests/support/` for the server-side codec used by the tests and fuzzers (not installed), `tests/install/` and `tests/coverage/`), `examples/`, `packaging/` for the vcpkg ports and Conan recipes, and `versions/` for the vcpkg registry versions. The design notes are in `docs/DESIGN.md`.
 
 ## Conventions & Patterns
 

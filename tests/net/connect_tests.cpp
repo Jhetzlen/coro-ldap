@@ -4,7 +4,7 @@
 #include "../../src/net/tls.hpp"
 #include "../../src/net/trust_store.hpp"
 #include "../../src/scope_util.hpp"
-#include "../counting_resource.hpp"
+#include "../unit/counting_resource.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/testing/message_io.hpp"

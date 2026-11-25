@@ -1,5 +1,5 @@
 // read_message / write_message against Capy's in-memory test streams.
-#include "../counting_resource.hpp"
+#include "../unit/counting_resource.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/testing/message_io.hpp"
 #include "net_test_support.hpp"

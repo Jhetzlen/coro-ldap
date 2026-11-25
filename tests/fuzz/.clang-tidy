@@ -1,0 +1,27 @@
+# Fuzz targets and their replay mains: the root .clang-tidy (the checks that
+# tests/.clang-tidy turns off are back on), except that an exception escaping
+# a replay main is the finding (a crash), as in libFuzzer.
+InheritParentConfig: true
+CheckOptions:
+  bugprone-exception-escape.CheckMain: false
+Checks:
+  - readability-function-cognitive-complexity
+  - bugprone-unchecked-optional-access
+  - performance-inefficient-string-concatenation
+  - cppcoreguidelines-avoid-c-arrays
+  - modernize-avoid-c-arrays
+  - cppcoreguidelines-pro-bounds-array-to-pointer-decay
+  - bugprone-throwing-static-initialization
+  - cert-err58-cpp
+  - misc-misleading-bidirectional
+  - misc-const-correctness
+  - performance-unnecessary-copy-initialization
+  - cppcoreguidelines-no-malloc
+  - cppcoreguidelines-avoid-non-const-global-variables
+  - clang-analyzer-optin.core.EnumCastOutOfRange
+  - concurrency-mt-unsafe
+  - modernize-use-nodiscard
+  - bugprone-easily-swappable-parameters
+  # Test vectors and sizes are the point of a replay or a fuzz target.
+  - -cppcoreguidelines-avoid-magic-numbers
+  - -readability-magic-numbers

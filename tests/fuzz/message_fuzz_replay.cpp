@@ -1,5 +1,5 @@
 // Deterministic driver for message_fuzz under ctest.
-#include "../tests/sample_messages.hpp"
+#include "../unit/sample_messages.hpp"
 #include "replay.hpp"
 
 #include <cstdint>
