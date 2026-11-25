@@ -2738,37 +2738,35 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	SECTION("a bind stopped after the first ends, before it resumes, is not sent")
 	{
 		// The stop comes after bind_idle.set() claimed the waiter, before it
-		// resumes.
-		if constexpr (JHETZ_LDAP_WINDOWS_DLL != 0) {
-			SKIP("with DLLs on Windows the waiter resumes before the first bind's handler");
-		} else {
-			mock_ldap m;
-			m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }) });
-			outcome<ldap::result<ldap::connection>> first;
-			outcome<ldap::result<ldap::connection>> second;
-			std::stop_source stop;
-			capy::run_async(
-			  m.conn.executor(),
-			  [s = first.state, &stop](ldap::result<ldap::connection> v) {
-				  s->value.emplace(std::move(v));
-				  stop.request_stop();
-			  },
-			  [s = first.state](std::exception_ptr e) { s->error = std::move(e); })(
-			  m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
-			spawn(m.ioc, stop.get_token(), m.conn.simple_bind(ldap::dn{}, ""), second);
-			drive_until(m.ioc, [&] { return first.done() && second.done(); });
-			CHECK(first.get().has_value());
-			REQUIRE_FALSE(second.get().has_value());
-			CHECK(second.get().error().code == ldap::cond::canceled);
-			CHECK(second.get().error().context == "bind \"\"");
-			CHECK(m.conn.is_open());
-			CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
-			m.check_server();
-			REQUIRE(m.log.received.size() == 2);// the stopped bind was never sent
-			CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
-			CHECK(m.log.received[1].id == 2);
-			CHECK(std::holds_alternative<ldap::search_request>(m.log.received[1].op));
-		}
+		// resumes: a bind awaited on the connection's strand runs there
+		// inline, so it completes, and the handler runs, before the waiter
+		// set() posted to the strand.
+		mock_ldap m;
+		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }) });
+		outcome<ldap::result<ldap::connection>> first;
+		outcome<ldap::result<ldap::connection>> second;
+		std::stop_source stop;
+		capy::run_async(
+		  m.conn.executor(),
+		  [s = first.state, &stop](ldap::result<ldap::connection> v) {
+			  s->value.emplace(std::move(v));
+			  stop.request_stop();
+		  },
+		  [s = first.state](std::exception_ptr e) { s->error = std::move(e); })(
+		  m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+		spawn(m.ioc, stop.get_token(), m.conn.simple_bind(ldap::dn{}, ""), second);
+		drive_until(m.ioc, [&] { return first.done() && second.done(); });
+		CHECK(first.get().has_value());
+		REQUIRE_FALSE(second.get().has_value());
+		CHECK(second.get().error().code == ldap::cond::canceled);
+		CHECK(second.get().error().context == "bind \"\"");
+		CHECK(m.conn.is_open());
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);// the stopped bind was never sent
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+		CHECK(m.log.received[1].id == 2);
+		CHECK(std::holds_alternative<ldap::search_request>(m.log.received[1].op));
 	}
 	SECTION("unbind during a bind closes without an UnbindRequest")
 	{

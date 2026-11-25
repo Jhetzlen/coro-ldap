@@ -193,9 +193,6 @@ if(JHETZ_LDAP_BUILD_NET)
         endif()
     endif()
     target_link_libraries(jhetz_ldap_client_tests PRIVATE jhetz::ldap_ad jhetz::ldap_testing_net Catch2::Catch2WithMain)
-    # 1 on a Windows build with DLLs.
-    target_compile_definitions(jhetz_ldap_client_tests PRIVATE
-        JHETZ_LDAP_WINDOWS_DLL=$<AND:$<PLATFORM_ID:Windows>,$<BOOL:${BUILD_SHARED_LIBS}>>)
     # Against slapd (run_slapd.sh): label "integration", skipped without it.
     add_executable(jhetz_ldap_integration_tests integration/integration_tests.cpp)
     target_link_libraries(jhetz_ldap_integration_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)

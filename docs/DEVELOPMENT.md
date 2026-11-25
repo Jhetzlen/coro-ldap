@@ -105,10 +105,13 @@ executable in `build/bin` (`CMAKE_RUNTIME_OUTPUT_DIRECTORY`, when not set),
 so the tests find our DLLs and Capy's and Corosio's; ICU's and OpenSSL's
 still come from `PATH`. With DLLs, `jhetz_ldap_alloc_tests`' replaced
 `operator new` does not see the allocations made inside `jhetz_ldap_core`
-(each DLL has its own), so it checks less there. One ordering test (a bind
-stopped after the first ends, before it resumes) is skipped on a Windows
-DLL build, where the waiting bind resumes before the first bind's handler
-(`JHETZ_LDAP_WINDOWS_DLL`, bead coro-ldap-fzj).
+(each DLL has its own), so it checks less there. The same per-module
+copies hold for the dependencies' inline variables, so never compare their
+addresses: Capy's `executor_ref ==` compares its per-type vtables (inline
+variables) by address, and an `executor_ref` made in the application never
+equals one made in our DLL. `on_strand()` (`src/strand_util.hpp`) compares
+the strands through `executor_ref::target()`, whose type check compares
+`type_info`s by value.
 
 ## Windows
 
