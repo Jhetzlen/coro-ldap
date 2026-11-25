@@ -2,7 +2,6 @@
 // returns in windows (`member;range=0-1499`, ...).
 #pragma once
 
-#include "jhetz/ldap/ad/range.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/dn.hpp"

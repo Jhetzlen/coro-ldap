@@ -3,17 +3,11 @@
 // nothing is sent (docs/API.md, "jhetz/ldap/referral.hpp").
 #pragma once
 
-#include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/url.hpp"
 
 #include <cstddef>
-#include <cstdint>
-#include <memory_resource>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace jhetz::ldap {
 

@@ -6,7 +6,6 @@
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/connection_options.hpp"
-#include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/referral.hpp"

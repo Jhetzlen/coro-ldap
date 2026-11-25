@@ -5,12 +5,10 @@
 
 #include "jhetz/ldap/ad/syntax.hpp"
 #include "jhetz/ldap/mapping.hpp"
-#include "jhetz/ldap/schema.hpp"
 
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <limits>
 #include <ratio>
 #include <string>
 #include <string_view>

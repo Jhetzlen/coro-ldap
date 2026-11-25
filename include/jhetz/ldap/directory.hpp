@@ -3,7 +3,6 @@
 // trait.
 #pragma once
 
-#include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/schema.hpp"

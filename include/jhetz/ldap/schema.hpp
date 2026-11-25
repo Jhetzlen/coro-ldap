@@ -8,7 +8,6 @@
 
 #include <array>
 #include <cstddef>
-#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <span>

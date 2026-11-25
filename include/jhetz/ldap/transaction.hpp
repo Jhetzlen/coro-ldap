@@ -4,7 +4,6 @@
 
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/error.hpp"
-#include "jhetz/ldap/message.hpp"
 #include "jhetz/ldap/operations.hpp"
 
 #include <boost/capy/task.hpp>
