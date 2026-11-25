@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(jhetz_ldap VERSION 0.1.0 LANGUAGES CXX)
 
-option(JHETZ_LDAP_BUILD_TESTS "Build the jhetz::ldap unit tests" ON)
+option(JHETZ_LDAP_BUILD_TESTS "Build the jhetz::ldap unit tests" ${PROJECT_IS_TOP_LEVEL})
 option(JHETZ_LDAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang only)" OFF)
 # jhetz::ldap is off by default in a fuzz build (the fuzzers exercise
 # the codec).
@@ -32,7 +32,7 @@ else()
     set(jhetz_ldap_gssapi_default OFF)
 endif()
 option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap (Windows: SSPI, built in; elsewhere the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" ${jhetz_ldap_gssapi_default})
-option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
+option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ${PROJECT_IS_TOP_LEVEL})
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
 option(JHETZ_LDAP_CLANG_TIDY "Run clang-tidy (.clang-tidy) on our own targets while building them" OFF)
 

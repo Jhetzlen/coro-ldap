@@ -1553,10 +1553,10 @@ TEST_CASE("system trust store: anchors from a store listing", "[net][connect][tl
 	};
 	const auto ca_der = to_uchar(certificate_der(pki().ca_pem()));
 	const auto other_der = to_uchar(certificate_der(pki().issue("other", "DNS:other.example").cert_pem));
+	REQUIRE(ca_der.size() > 1);
 	auto trailing = ca_der;
 	trailing.push_back(0);
-	auto truncated = ca_der;
-	truncated.pop_back();
+	const std::vector<unsigned char> truncated(ca_der.begin(), std::prev(ca_der.end()));
 
 	const std::vector<net::detail::system_certificate> listing{
 		{ .der = ca_der },

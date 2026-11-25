@@ -5,7 +5,7 @@ from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import copy, get, rmdir, save
 
-required_conan_version = ">=2.1"
+required_conan_version = ">=2.28"
 
 # CMAKE_PROJECT_INCLUDE: Corosio links Boost::capy without finding it, and
 # its install rules look for a target named boost_capy.

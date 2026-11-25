@@ -9,7 +9,7 @@ from conan.tools.gnu import PkgConfig
 from conan.tools.scm import Version
 from conan.tools.system.package_manager import Apt, Dnf, PacMan, Yum, Zypper
 
-required_conan_version = ">=2.1"
+required_conan_version = ">=2.28"
 
 
 class JhetzLdapConan(ConanFile):

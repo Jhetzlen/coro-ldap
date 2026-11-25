@@ -56,7 +56,8 @@ and they include the shared internal headers of `src/`.
 
 | Option | Default | |
 |---|---|---|
-| `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
+| `JHETZ_LDAP_BUILD_TESTS` | `ON` (`OFF` as a subproject) | unit tests and the `*_fuzz_replay` tests |
+| `JHETZ_LDAP_BUILD_EXAMPLES` | `ON` (`OFF` as a subproject) | the programs in `examples/` (see [Examples](#examples)); need `JHETZ_LDAP_BUILD_NET` |
 | `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap`, `jhetz::ldap_ad` (Active Directory, DESIGN.md section 12) and their tests; fetches Corosio + Capy, needs OpenSSL |
 | `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
