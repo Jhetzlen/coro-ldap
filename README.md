@@ -155,7 +155,7 @@ and `jhetz-ldap/0.1.0` under `[requires]` in your `conanfile.txt` (with the
 `CMakeDeps` and `CMakeToolchain` generators). Both give the CMake package:
 
 ```cmake
-find_package(jhetz_ldap 0.1 REQUIRED)
+find_package(jhetz_ldap 0.2 REQUIRED)
 target_link_libraries(app PRIVATE jhetz::ldap)  # or jhetz::ldap_core, jhetz::ldap_ad
 ```
 

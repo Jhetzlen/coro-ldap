@@ -70,8 +70,8 @@ and they include the shared internal headers of `src/`.
 ### Shared libraries
 
 `-DBUILD_SHARED_LIBS=ON` builds `jhetz_ldap_core`, `jhetz_ldap` and
-`jhetz_ldap_ad` as shared libraries (`libjhetz_ldap.so.0.1.0`, SONAME
-`libjhetz_ldap.so.0.1`, since a 0.x minor version may break the ABI; DLLs
+`jhetz_ldap_ad` as shared libraries (`libjhetz_ldap.so.0.2.0`, SONAME
+`libjhetz_ldap.so.0.2`, since a 0.x minor version may break the ABI; DLLs
 on Windows); without it they are static. Both are tested, in CI too. Our
 libraries are always position-independent, and so are the fetched Capy and
 Corosio unless `CMAKE_POSITION_INDEPENDENT_CODE` is set. `jhetz::ldap_testing`
@@ -375,13 +375,13 @@ link `jhetz::ldap` (the client) / `jhetz::ldap_core` (the codec only) /
 `jhetz::ldap_ad`, or install it and use the CMake package:
 
 ```cmake
-find_package(jhetz_ldap 0.1 REQUIRED)                  # component `net`, the default
+find_package(jhetz_ldap 0.2 REQUIRED)                  # component `net`, the default
 target_link_libraries(app PRIVATE jhetz::ldap)
 # The codec only, also from a codec-only install:
-find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS core)
+find_package(jhetz_ldap 0.2 REQUIRED COMPONENTS core)
 target_link_libraries(app PRIVATE jhetz::ldap_core)
 # Active Directory operations (ldap::ad over the connection):
-find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)
+find_package(jhetz_ldap 0.2 REQUIRED COMPONENTS net ad)
 target_link_libraries(app PRIVATE jhetz::ldap_ad)
 ```
 
@@ -389,7 +389,7 @@ The components are `net` (`jhetz::ldap`, requested when none is named),
 `core` (`jhetz::ldap_core`), `ad` (`jhetz::ldap_ad`) and `gssapi` (SASL
 GSSAPI in `jhetz::ldap`). The libraries are `libjhetz_ldap_core.a`,
 `libjhetz_ldap.a` and `libjhetz_ldap_ad.a`, or with `BUILD_SHARED_LIBS` the
-shared ones (`.so` with SONAME `.so.0.1`; `.dll` and import `.lib`), and the
+shared ones (`.so` with SONAME `.so.0.2`; `.dll` and import `.lib`), and the
 installed Capy and Corosio must have the same linkage
 ([Shared libraries](#shared-libraries)).
 

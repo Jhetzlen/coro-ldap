@@ -1703,7 +1703,7 @@ Active Directory behaviour no RFC describes, as free functions and types in
 codec-level headers are part of `jhetz::ldap_core`; the operations that need
 the network are in the target `jhetz::ldap_ad` (links `jhetz::ldap`;
 package component `ad`:
-`find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)`).
+`find_package(jhetz_ldap 0.2 REQUIRED COMPONENTS net ad)`).
 
 - `jhetz/ldap/ad/password.hpp` (`jhetz::ldap_ad`): `ad::change_password(c,
   user, old, new)` (a user's own) and `ad::reset_password(c, user, new)`
