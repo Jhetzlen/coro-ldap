@@ -105,7 +105,10 @@ executable in `build/bin` (`CMAKE_RUNTIME_OUTPUT_DIRECTORY`, when not set),
 so the tests find our DLLs and Capy's and Corosio's; ICU's and OpenSSL's
 still come from `PATH`. With DLLs, `jhetz_ldap_alloc_tests`' replaced
 `operator new` does not see the allocations made inside `jhetz_ldap_core`
-(each DLL has its own), so it checks less there.
+(each DLL has its own), so it checks less there. One ordering test (a bind
+stopped after the first ends, before it resumes) is skipped on a Windows
+DLL build, where the waiting bind resumes before the first bind's handler
+(`JHETZ_LDAP_WINDOWS_DLL`, bead coro-ldap-fzj).
 
 ## Windows
 
@@ -114,9 +117,12 @@ CryptoAPI trust store and chain verification, wide file paths, MSVC-safe
 code and CMake), and the build and unit tests are CI-verified: the
 `windows` workflow (`.github/workflows/windows.yml`) builds a Debug
 `/W4 /WX` build with MSVC on `windows-latest` (Visual Studio 2026, MSVC
-19.52 at the time of writing) against vcpkg's ICU and OpenSSL, and runs
+19.52 at the time of writing) against vcpkg's ICU and OpenSSL, once with
+static libraries and once with DLLs, and runs
 every ctest test but the `integration` label (no slapd, Samba or KDC on
 Windows; the tests that need the DNS fixtures or Linux interfaces skip).
+Each of the two jobs then runs `tests/install/check_vcpkg.sh` on
+`x64-windows-static` or `x64-windows`.
 Locally, the Linux setup still has no Windows toolchain and checks the
 port by syntax checks against the mingw-w64 headers. clang-cl and MinGW
 have not been built.
