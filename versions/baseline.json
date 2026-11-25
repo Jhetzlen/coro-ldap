@@ -2,15 +2,15 @@
   "default": {
     "capy": {
       "baseline": "2026-11-19",
-      "port-version": 0
+      "port-version": 1
     },
     "corosio": {
       "baseline": "2026-11-20",
-      "port-version": 0
+      "port-version": 1
     },
     "jhetz-ldap": {
       "baseline": "0.1.0",
-      "port-version": 0
+      "port-version": 1
     }
   }
 }
