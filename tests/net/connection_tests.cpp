@@ -2739,6 +2739,9 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	{
 		// The stop comes after bind_idle.set() claimed the waiter, before it
 		// resumes.
+		if constexpr (JHETZ_LDAP_WINDOWS_DLL != 0) {
+			SKIP("with DLLs on Windows the waiter resumes before the first bind's handler");
+		}
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }) });
 		outcome<ldap::result<ldap::connection>> first;
