@@ -1,9 +1,11 @@
 {
   "name": "capy",
   "version-date": "2026-11-19",
+  "port-version": 1,
   "description": "Boost.Capy: coroutine primitives for asynchronous I/O (C++20).",
   "homepage": "https://github.com/cppalliance/capy",
   "license": "BSL-1.0",
+  "supports": "!(osx | ios | uwp | android | emscripten | mingw)",
   "dependencies": [
     {
       "name": "vcpkg-cmake",

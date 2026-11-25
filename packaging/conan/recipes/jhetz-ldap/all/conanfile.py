@@ -45,7 +45,11 @@ class JhetzLdapConan(ConanFile):
     def configure(self):
         if self.options.shared:
             self.options.rm_safe("fPIC")
-        if not self.options.net:
+        if self.options.net:
+            # Capy and Corosio have the same linkage as jhetz-ldap.
+            self.options["capy/*"].shared = self.options.shared
+            self.options["corosio/*"].shared = self.options.shared
+        else:
             self.options.rm_safe("gssapi")
 
     def layout(self):
@@ -66,8 +70,10 @@ class JhetzLdapConan(ConanFile):
         minimum = self._min_compilers.get(compiler)
         if minimum and Version(self.settings.compiler.version) < minimum:
             raise ConanInvalidConfiguration(f"{self.ref} needs {compiler} {minimum} or newer")
-        if self.options.shared:
-            raise ConanInvalidConfiguration(f"{self.ref} builds static libraries only")
+        if self.options.net:
+            for dep in ("capy", "corosio"):
+                if self.dependencies[dep].options.shared != self.options.shared:
+                    raise ConanInvalidConfiguration(f"{self.ref} and {dep} must be both static or both shared")
 
     def system_requirements(self):
         # On Windows, SSPI is part of the OS.

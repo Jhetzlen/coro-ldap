@@ -4,6 +4,7 @@
 # (docs/DEVELOPMENT.md "vcpkg"):
 #   tests/install/check_vcpkg.sh WORK_DIR [TRIPLET [gssapi]]
 # With gssapi the consumer uses jhetz-ldap[gssapi] (the system GSS-API).
+# Runs on Linux and, under Git Bash with the MSVC environment, on Windows.
 # The vcpkg is build/tools/vcpkg (JHETZ_LDAP_VCPKG overrides it, VCPKG_ROOT
 # is ignored); the binary cache and the downloads default to
 # build/tools/vcpkg-cache and build/tools/vcpkg-downloads.
@@ -14,6 +15,13 @@ gssapi=${3:-}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 vcpkg_root=${JHETZ_LDAP_VCPKG:-$root/build/tools/vcpkg}
+# Git Bash on Windows: C:/... paths, which both bash and vcpkg and CMake read.
+if command -v cygpath >/dev/null 2>&1; then
+	work=$(cygpath -m "$work")
+	here=$(cygpath -m "$here")
+	root=$(cygpath -m "$root")
+	vcpkg_root=$(cygpath -m "$vcpkg_root")
+fi
 unset VCPKG_ROOT
 export VCPKG_DEFAULT_BINARY_CACHE="${VCPKG_DEFAULT_BINARY_CACHE:-$root/build/tools/vcpkg-cache}"
 export VCPKG_DOWNLOADS="${VCPKG_DOWNLOADS:-$root/build/tools/vcpkg-downloads}"
@@ -61,9 +69,15 @@ step "vcpkg install ($triplet${gssapi:+, $gssapi})"
 	--overlay-ports="$work/ports" --x-install-root="$work/vcpkg_installed" --clean-after-build
 
 step "consumer"
+# A static Windows triplet has the static CRT.
+crt=
+case "$triplet" in
+*-windows-static) crt=-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ;;
+esac
 cmake -S "$here/vcpkg_consumer" -B "$work/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_TOOLCHAIN_FILE="$vcpkg_root/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET="$triplet" \
-	-DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_INSTALLED_DIR="$work/vcpkg_installed" -DWITH_GSSAPI="$with_gssapi" >/dev/null
+	-DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_INSTALLED_DIR="$work/vcpkg_installed" -DWITH_GSSAPI="$with_gssapi" \
+	$crt >/dev/null
 cmake --build "$work/build" >/dev/null
 "$work/build/consumer"
 echo "vcpkg check passed"

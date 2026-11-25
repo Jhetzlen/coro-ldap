@@ -1,9 +1,11 @@
 {
   "name": "corosio",
   "version-date": "2026-11-20",
+  "port-version": 1,
   "description": "Boost.Corosio: coroutine-first networking on Capy, with OpenSSL TLS streams.",
   "homepage": "https://github.com/cppalliance/corosio",
   "license": "BSL-1.0",
+  "supports": "!(osx | ios | uwp | android | emscripten | mingw)",
   "dependencies": [
     "capy",
     "openssl",
