@@ -54,6 +54,7 @@ namespace jhetz::ldap {
 
 auto detail::op_context(std::string_view op, const dn &d) -> std::string { return op_context(op, d.to_string()); }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the operation, then its DN
 auto detail::op_context(std::string_view op, std::string_view dn) -> std::string
 {
 	if (dn.empty()) {

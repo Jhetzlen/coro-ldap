@@ -445,6 +445,7 @@ struct session
 auto scripts_of(std::vector<session> sessions) -> std::vector<session_script>
 {
 	std::vector<session_script> out;
+	out.reserve(sessions.size());
 	for (auto &s : sessions) {
 		out.push_back({ .script = std::move(s.script), .tls = s.tls });
 	}

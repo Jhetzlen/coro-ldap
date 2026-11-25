@@ -46,7 +46,6 @@
 #include <vector>
 
 namespace ldap = jhetz::ldap;
-namespace net = jhetz::ldap::net;
 namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;

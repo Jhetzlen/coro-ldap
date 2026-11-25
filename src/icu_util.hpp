@@ -37,6 +37,7 @@ inline auto to_utf16(std::string_view in, std::vector<UChar> &out) -> UErrorCode
 	const auto length = static_cast<int32_t>(in.size());
 	UErrorCode status = U_ZERO_ERROR;
 	int32_t n = 0;
+	// NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): sized by length, no terminator read
 	u_strFromUTF8(nullptr, 0, &n, in.data(), length, &status);
 	if (status != U_BUFFER_OVERFLOW_ERROR && icu_failed(status)) {
 		return status;
@@ -44,6 +45,7 @@ inline auto to_utf16(std::string_view in, std::vector<UChar> &out) -> UErrorCode
 	out.resize(static_cast<std::size_t>(n));
 	status = U_ZERO_ERROR;
 	if (n > 0) {
+		// NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): sized by length, no terminator read
 		u_strFromUTF8(out.data(), n, &n, in.data(), length, &status);
 	}
 	return status;

@@ -451,6 +451,7 @@ class script_server
 	  std::vector<std::vector<step>> scripts,
 	  std::optional<corosio::tls_context> tls = std::nullopt,
 	  socket_buffers buffers = socket_buffers::system)
+	  // NOLINTNEXTLINE(bugprone-use-after-move): a moved-from optional keeps its engagement
 	  : script_server(ioc, sessions_of(std::move(scripts), tls.has_value()), std::move(tls), buffers)
 	{}
 	// The sessions with .tls over TLS with `tls`.
@@ -518,6 +519,7 @@ class script_server
 	static auto sessions_of(std::vector<std::vector<step>> scripts, bool tls) -> std::vector<session_script>
 	{
 		std::vector<session_script> out;
+		out.reserve(scripts.size());
 		for (auto &s : scripts) {
 			out.push_back({ .script = std::move(s), .tls = tls });
 		}
