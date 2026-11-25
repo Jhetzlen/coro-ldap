@@ -151,7 +151,7 @@ git clone https://github.com/Jhetzlen/coro-ldap
 conan remote add coro-ldap ./coro-ldap/packaging/conan --type=local-recipes-index
 ```
 
-and `jhetz-ldap/0.1.0` under `[requires]` in your `conanfile.txt` (with the
+and `jhetz-ldap/0.2.0` under `[requires]` in your `conanfile.txt` (with the
 `CMakeDeps` and `CMakeToolchain` generators). Both give the CMake package:
 
 ```cmake
@@ -163,7 +163,7 @@ target_link_libraries(app PRIVATE jhetz::ldap)  # or jhetz::ldap_core, jhetz::ld
 
 ```cmake
 include(FetchContent)
-FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG v0.1.0)
+FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG v0.2.0)
 FetchContent_MakeAvailable(coro_ldap)
 target_link_libraries(app PRIVATE jhetz::ldap)
 ```

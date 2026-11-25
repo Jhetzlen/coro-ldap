@@ -500,9 +500,8 @@ tests/install/check_vcpkg.sh build/vcpkg-test-dyn x64-linux-dynamic
 
 The script also runs on Windows under Git Bash with the MSVC environment
 (`windows.yml` runs it on `x64-windows` and `x64-windows-static`).
-The release tarball of 0.1.0 predates shared builds: on a dynamic triplet
-it still gives static libraries; the port's linkage applies from the next
-release.
+Shared builds start with 0.2.0: the 0.1.0 tarball gives static libraries
+even on a dynamic triplet.
 
 The `jhetz-ldap` port downloads the tag `v${VERSION}` (its `vcpkg.json`
 version). After a release tag is pushed, set `"version"` in
@@ -559,8 +558,8 @@ vcpkg port; on Windows SSPI's `secur32`, without system requirements or
 pkg-config), plus `shared` and `fPIC`. `shared` is propagated to `capy`
 and `corosio` (both have `shared` and `fPIC`, and define
 `BOOST_*_DYN_LINK` when shared), and a mismatch is refused; as for vcpkg,
-the 0.1.0 tarball builds static libraries whatever `shared` says, so
-shared applies from the next release. ICU and OpenSSL come from ConanCenter; ICU's data is built into
+shared builds start with 0.2.0 (the 0.1.0 tarball builds static libraries
+whatever `shared` says). ICU and OpenSSL come from ConanCenter; ICU's data is built into
 `libicudata` (`icu/*:data_packaging=library`). The package is
 `find_package(jhetz_ldap)` with the targets `jhetz::ldap`,
 `jhetz::ldap_core` and `jhetz::ldap_ad`.
@@ -574,15 +573,15 @@ export CONAN_HOME=$PWD/build/tools/conan-home
 conan profile detect && sed -i 's/^compiler.cppstd=.*/compiler.cppstd=23/' $CONAN_HOME/profiles/default
 conan create packaging/conan/recipes/capy/all --version cci.20261119 --build=missing
 conan create packaging/conan/recipes/corosio/all --version cci.20261120 --build=missing
-conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 --build=missing   # ICU, OpenSSL: ~15 min
-conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o 'jhetz-ldap/*:net=False'
-conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o 'jhetz-ldap/*:gssapi=True'
-conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o '*:shared=True' --build=missing
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.2.0 --build=missing   # ICU, OpenSSL: ~15 min
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.2.0 -o 'jhetz-ldap/*:net=False'
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.2.0 -o 'jhetz-ldap/*:gssapi=True'
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.2.0 -o '*:shared=True' --build=missing
 ```
 
 A consumer adds a clone as a remote
 (`conan remote add coro-ldap <clone>/packaging/conan --type=local-recipes-index`)
-and requires `jhetz-ldap/0.1.0`; recipes come from the clone's working tree,
+and requires `jhetz-ldap/0.2.0`; recipes come from the clone's working tree,
 so `git pull` it for a new release.
 
 ## Examples

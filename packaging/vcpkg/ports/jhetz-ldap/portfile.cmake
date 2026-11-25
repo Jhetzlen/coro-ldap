@@ -6,7 +6,7 @@ else()
         OUT_SOURCE_PATH SOURCE_PATH
         REPO Jhetzlen/coro-ldap
         REF "v${VERSION}"
-        SHA512 f1ea94e0744444921477e123386879d51ff8aabe626e7fe6946cc1ac7efae8129e24df89d8791a3b8d6117ce21d49740db5db7e14f461c7570ac44781a7b9e83
+        SHA512 42e4b9fd7f3e1234650ee8a61a8f2a359c6dcaa018624de570b4e91910de378f0d08b0f50a6ede9e209193866f225a700f5eb9cb5d65a36526e6f7eb3a086ce0
         HEAD_REF main
     )
 endif()
