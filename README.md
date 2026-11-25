@@ -98,13 +98,14 @@ results) is in [`examples/`](examples/), one small program per task.
 | [Capy](https://github.com/cppalliance/capy) | The coroutine `task` type, executors and strands | fetched by CMake |
 | OpenSSL | TLS for `ldaps://` and StartTLS (through Corosio), and the hashing for SASL SCRAM and NTLM | install it |
 | ICU 60+ | UTF-8 handling and Unicode string preparation (RFC 4518, SASLprep) | install it |
-| GSS-API from the OS: MIT krb5 or Heimdal (optional) | SASL GSSAPI / Kerberos, only with `-DJHETZ_LDAP_WITH_GSSAPI=ON` (pkg-config `krb5-gssapi` or `heimdal-gssapi`) | install it |
+| GSS-API from the OS: MIT krb5 or Heimdal (optional); SSPI on Windows | SASL GSSAPI / Kerberos, with `-DJHETZ_LDAP_WITH_GSSAPI=ON` (pkg-config `krb5-gssapi` or `heimdal-gssapi`); on Windows SSPI (`secur32`), on by default | install it; Windows: built in |
 | Catch2 | Tests only | fetched by CMake |
 
 Debian: `apt install libicu-dev libssl-dev`, plus `libkrb5-dev pkg-config` for
 GSSAPI (Fedora `krb5-devel`, Arch `krb5`). The vcpkg `gssapi` feature and the
-Conan `gssapi` option use that system library too. There is no GSSAPI on
-Windows yet (SSPI is planned).
+Conan `gssapi` option use that system library too. On Windows GSSAPI is
+SSPI's Kerberos, part of the OS, and binds as the logged-on user by
+default.
 
 ## Build and use
 

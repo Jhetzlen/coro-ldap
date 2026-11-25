@@ -115,10 +115,10 @@ done
 ln -sfn /usr/include/openssl $M/deps/openssl; ln -sfn /usr/include/unicode $M/deps/unicode
 I=$M/root/usr/x86_64-w64-mingw32/include; C=$I/c++/$(ls $I/c++ | tail -1); D=$PWD/build/main/_deps
 for f in $(ls src/*.cpp src/*/*.cpp testing/src/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp \
-           | grep -v -e trust_store_default -e sasl_gssapi); do
+           | grep -v -e trust_store_default -e sasl_gssapi_gss); do
   clang++ --target=x86_64-w64-mingw32 -std=c++23 -fsyntax-only -nostdinc++ -nostdlibinc \
     -isystem $C -isystem $C/x86_64-w64-mingw32 -isystem $C/backward -isystem $I -isystem $M/deps \
-    -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DCERT_CHAIN_PARA_HAS_EXTRA_FIELDS \
+    -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DCERT_CHAIN_PARA_HAS_EXTRA_FIELDS -DSECURITY_WIN32 \
     -DBOOST_CAPY_NO_LIB -DBOOST_CAPY_STATIC_LINK -DBOOST_COROSIO_HAS_OPENSSL \
     -DBOOST_COROSIO_NO_LIB -DBOOST_COROSIO_STATIC_LINK -DJHETZ_LDAPSEARCH='"jhetz-ldapsearch.exe"' \
     -Iinclude -Itesting/include -Isrc -isystem $D/corosio-src/include -isystem $D/capy-src/include \
@@ -127,7 +127,8 @@ for f in $(ls src/*.cpp src/*/*.cpp testing/src/*.cpp tests/*.cpp tests/net/*.cp
 done
 ```
 
-`sasl_gssapi.cpp` is left out (Linux only, below), and
+`sasl_gssapi_gss.cpp` is left out (the GSS-API backend, which Windows
+builds replace with `sasl_gssapi_sspi.cpp`), and
 `trust_store_default.cpp`, which Windows builds replace with
 `trust_store_win.cpp`.
 
@@ -220,10 +221,38 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   100 ns); `from_sys` is defined up to `time_point::max()` minus the
   1601-to-1970 offset, as documented in `ad/filetime.hpp`.
 
+### SASL GSSAPI on a domain-joined machine
+
+CI builds the SSPI backend and runs its unit tests, but a Kerberos bind
+needs a domain, so it is checked by hand on a domain-joined Windows
+machine, logged on as a domain user, against a domain controller. With
+the build of [Build with vcpkg](#build-with-vcpkg):
+
+```bat
+cmake --build build --target jhetz_ldap_example_gssapi
+klist purge
+build\jhetz_ldap_example_gssapi.exe ldap://dc1.example.org
+klist
+```
+
+`JHETZ_LDAP_WITH_GSSAPI` is on by default there. The example binds with
+StartTLS and the logged-on user's ticket and prints `bound as
+u:EXAMPLE\jdoe`; `klist` then lists a service ticket for
+`ldap/dc1.example.org`. Use the DC's DNS name, not an address (the SPN is
+`ldap/<host>`). Also worth checking by hand:
+
+- plain `ldap://` without StartTLS, with `security_layer =
+  gssapi_security_layer::confidentiality` (AD's "require signing" policy
+  accepts it) and a search afterwards, so that the wrapped PDUs go both
+  ways;
+- `sasl_gssapi("jdoe@EXAMPLE.ORG", "<password>")` with a non-ASCII
+  password, and a wrong password (`SEC_E_LOGON_DENIED`);
+- over TLS with AD's LDAP channel binding policy ("Always"), the
+  tls-server-end-point bindings are accepted, and refused with
+  `channel_binding = gssapi_channel_binding::none`.
+
 ### Linux only
 
-- SASL GSSAPI: configure stops on `JHETZ_LDAP_WITH_GSSAPI` (SSPI is not
-  implemented).
 - The integration tests (`run_slapd.sh`, `run_openldap.sh`, `run_kdc.sh`,
   `run_samba_ad.sh`), coverage (`run_coverage.sh`, Clang only and rejected
   for clang-cl) and the fuzzers (configure stops on
@@ -375,12 +404,13 @@ recipes) in the same commit, then `x-add-version`.
 commits pinned in `CMakeLists.txt`) and `jhetz-ldap`, a static library with
 the features `net` (`jhetz::ldap` and `jhetz::ldap_ad`; `ad` is not a
 feature of its own, it is built with `net`), a default feature, and `gssapi`
-(needs `net`, not on Windows). `jhetz-ldap[core]` is the codec only
+(needs `net`). `jhetz-ldap[core]` is the codec only
 (`jhetz::ldap_core`, `COMPONENTS core`). ICU and OpenSSL come from vcpkg.
 `gssapi` uses the system GSS-API library (MIT krb5 or Heimdal), found with
 the system pkg-config as in a normal build, so the OS package must be
 installed: Debian `libkrb5-dev pkg-config`, Fedora
-`krb5-devel pkgconf`, Arch `krb5 pkgconf`. Corosio's port disables
+`krb5-devel pkgconf`, Arch `krb5 pkgconf`. On Windows it is SSPI
+(`secur32`), with nothing to install and no pkg-config. Corosio's port disables
 WolfSSL and liburing (the epoll backend). In a manifest:
 
 ```json
@@ -458,7 +488,8 @@ release tarball with `FETCHCONTENT_FULLY_DISCONNECTED=ON`, so Capy and
 Corosio come from Conan; its options are `net` (default `True`:
 `jhetz::ldap` and `jhetz::ldap_ad`; `False` is `jhetz::ldap_core` alone) and
 `gssapi` (default `False`; the system GSS-API through pkg-config, as in the
-vcpkg port), plus `fPIC` (`shared=True` is refused: the libraries are
+vcpkg port; on Windows SSPI's `secur32`, without system requirements or
+pkg-config), plus `fPIC` (`shared=True` is refused: the libraries are
 static). ICU and OpenSSL come from ConanCenter; ICU's data is built into
 `libicudata` (`icu/*:data_packaging=library`). The package is
 `find_package(jhetz_ldap)` with the targets `jhetz::ldap`,

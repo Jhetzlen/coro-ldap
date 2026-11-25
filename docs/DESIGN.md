@@ -630,7 +630,7 @@ the work running: it shares a `shared_ptr` block (the work, its result,
 the waker) with the wait, so nothing it touches dies under it, and its
 late `wake()` only latches a token nobody reads. The work owns or shares
 everything it uses (the mechanism may be destroyed, or start another
-bind, meanwhile): GSSAPI's work holds the handles' block by `shared_ptr`,
+bind, meanwhile): GSSAPI's work holds the security context's block by `shared_ptr`,
 marked busy while it runs (`step()` and `complete()` refuse it,
 `offload_start()` makes a new block), so no handle is used from two
 threads at once. The thread holds a `capy::work_guard` on the
@@ -849,7 +849,8 @@ against an in-process server (TLS 1.3 and 1.2) whose own SSL gives the
 expected tls-exporter; slapd over ldaps:// and StartTLS.
 
 GSSAPI (`sasl_gssapi.hpp`, RFC 4752, Kerberos V5; in jhetz::ldap only
-with the CMake option `JHETZ_LDAP_WITH_GSSAPI`, off by default): an
+with the CMake option `JHETZ_LDAP_WITH_GSSAPI`, off by default but on
+Windows, where it is SSPI, below): an
 optional dependency on the GSS-API C library (MIT krb5's
 `libgssapi_krb5`), found with pkg-config (`krb5-gssapi`, or Heimdal's
 `heimdal-gssapi`, untested) and linked privately; the installed package
@@ -885,7 +886,51 @@ reply. The layer messages are pure functions
 (`detail::parse_gssapi_layer_offer`, `gssapi_select_layer`,
 `gssapi_layer_reply`), unit tested without Kerberos. GSS-API handles (names, credentials,
 context, buffers) are owned by small RAII types; `gssapi.h` stays out of
-the public header (pimpl). `gss_acquire_cred` and every
+the public header (pimpl).
+
+Two backends, one front-end. `src/sasl_gssapi.cpp` holds what does not
+depend on the Kerberos API: the mechanism's state machine (phases,
+offloading, the busy flag), the RFC 4752 layer messages, the layer
+selection, the channel binding data, the input checks and the
+`sasl_security_layer` over the context. It drives an internal
+`detail::gssapi_context` (`src/sasl_gssapi_context.hpp`: acquire, init,
+established, flags, wrap, unwrap, wrap_size_limit, reset; pimpl again)
+that CMake implements with one file per platform, chosen at configure
+time rather than with `#ifdef`s: `sasl_gssapi_gss.cpp` (GSS-API, found
+with pkg-config) everywhere but Windows, `sasl_gssapi_sspi.cpp` (SSPI,
+`secur32`, compiled with `SECURITY_WIN32`) on Windows. The SSPI backend
+uses the "Kerberos" package, not "Negotiate": RFC 4752 is Kerberos V5
+only, and SPNEGO could settle on NTLM, whose tokens a GSSAPI acceptor
+rejects. Without a principal, `AcquireCredentialsHandleW` gets no
+identity, so the logged-on user's logon session (its TGT) is used, as
+wldap32 does; with one, a `SEC_WINNT_AUTH_IDENTITY_W` (UTF-16, from
+ICU's UTF-8 conversion; `user@domain`, `DOMAIN\user` or `user`) and the
+password, if any, all wiped after the call. The target `service@host`
+becomes the SPN `service/host`. `InitializeSecurityContextW` asks for
+mutual authentication and sequence detection, plus integrity and
+confidentiality only when a layer is asked for (as the GSS path; AD
+refuses a sign or seal flag on a bind over TLS); output tokens are
+allocated by the package and freed with `FreeContextBuffer`, and
+`SEC_I_COMPLETE_NEEDED` is handled with `CompleteAuthToken`. The RFC
+4752 wrap tokens are `EncryptMessage` with a TOKEN (the
+`cbSecurityTrailer` header), DATA and PADDING (`cbBlockSize`) buffer in
+place, concatenated as they come back; integrity is
+`SECQOP_WRAP_NO_ENCRYPT`, an RFC 4121 wrap token without
+encryption, which is what the peer's `gss_unwrap` expects
+(`MakeSignature` would make a MIC token instead). `DecryptMessage`
+takes the whole token as a STREAM buffer and finds the DATA in it; the
+QOP says whether it was encrypted. The size limit is the server's
+maximum less the trailer and block size (SSPI has no
+`gss_wrap_size_limit`). The tls-server-end-point application data goes
+in a `SECBUFFER_CHANNEL_BINDINGS` buffer (a `SEC_CHANNEL_BINDINGS`
+header without addresses, then the data), on every
+`InitializeSecurityContextW` call, as AD's own clients send it.
+SSPI statuses become `gssapi_failure` with the call, the `SEC_E_*` name,
+the value and a short English text (no `FormatMessage`: stable across
+locales); unknown values give the hex alone. The UTF-16 conversion, the
+identity split and the SPN are portable functions unit tested on Linux
+too; the status mapping is tested on Windows. A real bind needs a domain:
+DEVELOPMENT.md has the manual check. `gss_acquire_cred` and every
 `gss_init_sec_context` call run off the I/O thread (`offload_start`,
 `offload_step`, above): with MIT krb5 the first one resolves the KDC
 (DNS SRV, possibly canonicalizing the host) and sends the TGS-REQ,

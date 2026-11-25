@@ -985,11 +985,20 @@ itself needs only ICU.
   client certificate later) is refused on every ldaps:// and StartTLS
   connection, whether channel binding is used or not, and the connection
   fails (an error comparing equal to `cond::tls_failure`).
-- SASL GSSAPI (`sasl_gssapi`, option `JHETZ_LDAP_WITH_GSSAPI`, off by
-  default; needs the GSS-API library, MIT krb5's `libgssapi_krb5`, found
-  with pkg-config: Debian `libkrb5-dev`, Arch `krb5`): Kerberos binds with
-  the default credentials (the ticket cache of `kinit`, `KRB5CCNAME`) or
-  `sasl_gssapi_options::principal` (UTF-8, e.g. `jdoe@EXAMPLE.ORG`); the
+- SASL GSSAPI (`sasl_gssapi`, option `JHETZ_LDAP_WITH_GSSAPI`; on
+  Windows on by default and built on SSPI, nothing to install; elsewhere
+  off by default and needs the GSS-API library, MIT krb5's
+  `libgssapi_krb5`, found with pkg-config: Debian `libkrb5-dev`, Arch
+  `krb5`): Kerberos binds with the default credentials (the ticket cache
+  of `kinit`, `KRB5CCNAME`; on Windows the logged-on user's, as
+  wldap32 binds) or `sasl_gssapi_options::principal` (UTF-8, e.g.
+  `jdoe@EXAMPLE.ORG`: its tickets in the cache collection; on Windows the
+  credentials Windows holds for it), or from a password:
+  `sasl_gssapi(principal, password, options)` (both UTF-8; the password
+  parameter is wiped once copied) gets fresh credentials from the KDC
+  (`gss_acquire_cred_with_password`; on Windows a
+  `SEC_WINNT_AUTH_IDENTITY_W`, UTF-16, the user and domain taken from
+  `jdoe@EXAMPLE.ORG`, `EXAMPLE\jdoe` or `jdoe`); the
   target is `ldap@<the URL's host>` unless `options.target` names
   another (connect with the server's DNS name, not an address; ldapi://
   needs an explicit target); mutual authentication is required; an
@@ -1052,11 +1061,28 @@ itself needs only ICU.
   GSS-API failures (no ticket, unknown service principal, unreachable
   KDC) are `client_errc::gssapi_failure` (`cond::auth_failed`), the
   context quoting GSS-API's major and minor status messages; never
-  tokens or credentials. Every GSS-API handle is released (RAII). The
-  target, principal and `authz_id` must be well-formed UTF-8 without
-  control characters (`encode_error`).
-  The GSS-API calls that may block (`gss_acquire_cred`,
-  `gss_init_sec_context`: MIT krb5 does DNS lookups and asks the KDC for
+  tokens or credentials. Every GSS-API or SSPI handle and buffer is
+  released (RAII). The target, principal and `authz_id` must be
+  well-formed UTF-8 without control characters, the password well-formed
+  UTF-8 (`encode_error`), and a password needs a principal.
+  On Windows (SSPI, `secur32`): the package is "Kerberos", not
+  "Negotiate" (RFC 4752 is Kerberos V5 only, and Negotiate could fall
+  back to NTLM); the target `service@host` becomes the SPN
+  `service/host` (one with a `/` is passed as is);
+  `InitializeSecurityContextW` asks for `ISC_REQ_MUTUAL_AUTH` and
+  `ISC_REQ_SEQUENCE_DETECT`, with a layer also `ISC_REQ_INTEGRITY` and
+  `ISC_REQ_CONFIDENTIALITY`; the channel bindings are the same
+  application data in a `SEC_CHANNEL_BINDINGS` buffer (SSPI has no
+  `GSS_C_CHANNEL_BOUND_FLAG`); the security layer messages and PDUs are
+  `EncryptMessage` / `DecryptMessage` wrap tokens, for integrity with
+  `SECQOP_WRAP_NO_ENCRYPT` (what `gss_wrap` without confidentiality
+  makes, not `MakeSignature`'s MIC token), and a replayed or reordered
+  buffer fails in `DecryptMessage` (`SEC_E_OUT_OF_SEQUENCE`). Failures
+  name the SSPI call and its status, e.g. `InitializeSecurityContextW:
+  SEC_E_LOGON_DENIED (0x8009030C): logon denied`.
+  The calls that may block (`gss_acquire_cred`,
+  `gss_init_sec_context`, `AcquireCredentialsHandleW`,
+  `InitializeSecurityContextW`: MIT krb5 does DNS lookups and asks the KDC for
   the service ticket, retrying over the KDCs with backoff; the total is
   bounded by krb5.conf's `request_timeout`, MIT 1.22 and later, default
   none, and DNS by `resolv.conf`'s `timeout` and `attempts`)
