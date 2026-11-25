@@ -423,6 +423,12 @@ installed `jhetz_ldap-config-version.cmake` is generated from it with
 
 1. Set the version in `project()`, add its section to `CHANGELOG.md` (with
    the Breaking lines added to `docs/API.md` since the last release).
+   Nothing else names the version before the tag: `check_install.sh` and
+   `check_vcpkg.sh` read it from `project()` and pass it to the test
+   consumers' `find_package`, and `check_vcpkg.sh` sets it in its copy of
+   the `jhetz-ldap` port. Push this commit to a scratch branch and run
+   `ci.yml` and `windows.yml` on it (`gh workflow run ... --ref <branch>`):
+   the `install` job and the vcpkg port steps must be green before main.
 2. Tag the commit on main and push the tag: `git tag -a vX.Y.Z -m vX.Y.Z`,
    `git push origin vX.Y.Z`.
 3. vcpkg: set `"version"` in `packaging/vcpkg/ports/jhetz-ldap/vcpkg.json`
@@ -477,7 +483,10 @@ and configure with `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cm
 builds `tests/install/vcpkg_consumer` (the `consumer/main.cpp` of the
 install check) against the ports, with `jhetz-ldap` built from this source
 tree instead of the release tarball: it copies the ports into `WORK_DIR` and
-sets `JHETZ_LDAP_SOURCE_PATH` in the copied portfile. It uses the vcpkg in
+sets `JHETZ_LDAP_SOURCE_PATH` in the copied portfile and the copied
+`vcpkg.json`'s `"version"` to the tree's `project()` version (dropping
+`"port-version"`), so the port never disagrees with the tree before the
+release's port update. It uses the vcpkg in
 `build/tools/vcpkg` (not `VCPKG_ROOT`; `JHETZ_LDAP_VCPKG` overrides it),
 with the binary cache and downloads in `build/tools/`:
 

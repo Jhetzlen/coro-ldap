@@ -14,6 +14,8 @@ triplet=${2:-x64-linux}
 gssapi=${3:-}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
+version=$(sed -n 's/^project(jhetz_ldap VERSION \([0-9.]*\).*/\1/p' "$root/CMakeLists.txt")
+: "${version:?no project(jhetz_ldap VERSION ...) in CMakeLists.txt}"
 vcpkg_root=${JHETZ_LDAP_VCPKG:-$root/build/tools/vcpkg}
 # Git Bash on Windows: C:/... paths, which both bash and vcpkg and CMake read.
 if command -v cygpath >/dev/null 2>&1; then
@@ -48,6 +50,9 @@ portfile="$work/ports/jhetz-ldap/portfile.cmake"
 	echo "set(JHETZ_LDAP_SOURCE_PATH \"$root\") # tree $tree"
 	cat "$root/packaging/vcpkg/ports/jhetz-ldap/portfile.cmake"
 } >"$portfile"
+# The port's version is the tree's.
+sed -i -e "s/^  \"version\": \".*\",/  \"version\": \"$version\",/" -e '/^  "port-version":/d' \
+	"$work/ports/jhetz-ldap/vcpkg.json"
 
 manifest="$here/vcpkg_consumer"
 with_gssapi=OFF
@@ -58,7 +63,6 @@ if [ "$gssapi" = gssapi ]; then
 	cat >"$manifest/vcpkg.json" <<'EOF2'
 {
   "name": "jhetz-ldap-vcpkg-consumer",
-  "version": "0.1.0",
   "dependencies": [ { "name": "jhetz-ldap", "features": [ "gssapi" ] } ]
 }
 EOF2
@@ -77,6 +81,7 @@ esac
 cmake -S "$here/vcpkg_consumer" -B "$work/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_TOOLCHAIN_FILE="$vcpkg_root/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET="$triplet" \
 	-DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_INSTALLED_DIR="$work/vcpkg_installed" -DWITH_GSSAPI="$with_gssapi" \
+	-DJHETZ_LDAP_VERSION="$version" \
 	$crt >/dev/null
 cmake --build "$work/build" >/dev/null
 "$work/build/consumer"

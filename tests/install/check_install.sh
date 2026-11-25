@@ -9,6 +9,9 @@ top=$(realpath -m "${1:?usage: check_install.sh WORK_DIR [static|shared]}")
 linkages=${2:-static shared}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
+version=$(sed -n 's/^project(jhetz_ldap VERSION \([0-9.]*\).*/\1/p' "$root/CMakeLists.txt")
+: "${version:?no project(jhetz_ldap VERSION ...) in CMakeLists.txt}"
+soversion=${version%.*}
 
 # source_of NAME URL COMMIT OVERRIDE
 source_of() {
@@ -77,8 +80,8 @@ for linkage in $linkages; do
 	cmake --build "$work/build/ldap" >/dev/null
 	cmake --install "$work/build/ldap" >/dev/null
 	if [ "$shared" = ON ]; then
-		libs="libboost_capy.so libboost_corosio.so libboost_corosio_openssl.so libjhetz_ldap_core.so.0.1"
-		libs="$libs libjhetz_ldap.so.0.1 libjhetz_ldap_ad.so.0.1"
+		libs="libboost_capy.so libboost_corosio.so libboost_corosio_openssl.so libjhetz_ldap_core.so.$soversion"
+		libs="$libs libjhetz_ldap.so.$soversion libjhetz_ldap_ad.so.$soversion"
 	else
 		libs="libboost_capy.a libboost_corosio.a libboost_corosio_openssl.a libjhetz_ldap_core.a libjhetz_ldap.a"
 		libs="$libs libjhetz_ldap_ad.a"
@@ -90,7 +93,8 @@ for linkage in $linkages; do
 		fi
 	done
 	step "consumer with jhetz::ldap (the default) and jhetz::ldap_ad"
-	cmake -S "$here/consumer" -B "$work/build/consumer" $gen -DCMAKE_PREFIX_PATH="$work/prefix" >/dev/null
+	cmake -S "$here/consumer" -B "$work/build/consumer" $gen -DCMAKE_PREFIX_PATH="$work/prefix" \
+		-DJHETZ_LDAP_VERSION="$version" >/dev/null
 	cmake --build "$work/build/consumer" >/dev/null
 	"$work/build/consumer/consumer"
 
@@ -108,21 +112,21 @@ for linkage in $linkages; do
 	done <"$work/build/ldap-codec/jhetz_ldap_client_headers.txt"
 	step "consumer with COMPONENTS core (jhetz::ldap_core)"
 	cmake -S "$here/consumer" -B "$work/build/consumer-codec" $gen -DCMAKE_PREFIX_PATH="$work/prefix-codec" \
-		-DWITH_NET=OFF >/dev/null
+		-DWITH_NET=OFF -DJHETZ_LDAP_VERSION="$version" >/dev/null
 	cmake --build "$work/build/consumer-codec" >/dev/null
 	"$work/build/consumer-codec/consumer"
 	step "the default find_package fails to configure on the codec-only package"
 	if cmake -S "$here/consumer" -B "$work/build/consumer-missing" $gen -DCMAKE_PREFIX_PATH="$work/prefix-codec" \
-		>/dev/null 2>&1; then
+		-DJHETZ_LDAP_VERSION="$version" >/dev/null 2>&1; then
 		echo "unexpected: jhetz::ldap found in a codec-only install"
 		exit 1
 	fi
 	step "COMPONENTS ad alone fails to configure on the codec-only package"
 	mkdir -p "$work/build/ad-only-src"
-	cat >"$work/build/ad-only-src/CMakeLists.txt" <<'EOF2'
+	cat >"$work/build/ad-only-src/CMakeLists.txt" <<EOF2
 cmake_minimum_required(VERSION 3.25)
 project(jhetz_ldap_ad_only LANGUAGES CXX)
-find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS ad)
+find_package(jhetz_ldap $version REQUIRED COMPONENTS ad)
 EOF2
 	if cmake -S "$work/build/ad-only-src" -B "$work/build/consumer-ad-missing" $gen \
 		-DCMAKE_PREFIX_PATH="$work/prefix-codec" >/dev/null 2>&1; then
