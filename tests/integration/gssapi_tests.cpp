@@ -178,6 +178,17 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 		  { .principal = "user007@" + env("JHETZ_LDAP_IT_KRB5_REALM"), .require_tls = false });
 		CHECK(bind_and_who(ioc, c, with_realm) == user007);
 	}
+	SECTION("a principal and a password, UTF-8: credentials from the KDC, not the cache")
+	{
+		auto c = open(ioc, localhost_url());
+		ldap::sasl_gssapi jorg("j\xC3\xB6rg", "p\xC3\xA4ssw\xC3\xB6rd", { .require_tls = false });
+		CHECK(bind_and_who(ioc, c, jorg) == "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org");
+		ldap::sasl_gssapi wrong("j\xC3\xB6rg", "wrong", { .require_tls = false });
+		auto r = finish(ioc, c.sasl_bind(wrong));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
+		CHECK(c.is_open());
+	}
 	SECTION("an authorization identity (its own: no proxy authorization rules needed)")
 	{
 		auto c = open(ioc, localhost_url());

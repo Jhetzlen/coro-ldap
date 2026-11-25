@@ -1,5 +1,6 @@
 // SASL GSSAPI (RFC 4752): Kerberos V5 binds for connection::sasl_bind
-// (docs/API.md, "SASL GSSAPI"). Built with JHETZ_LDAP_WITH_GSSAPI.
+// (docs/API.md, "SASL GSSAPI"), over GSS-API or, on Windows, SSPI. Built
+// with JHETZ_LDAP_WITH_GSSAPI.
 #pragma once
 
 #include "jhetz/ldap/channel_binding.hpp"
@@ -17,7 +18,7 @@ namespace jhetz::ldap {
 enum class gssapi_channel_binding : std::uint8_t {
 	// "tls-server-end-point:<hash>" (RFC 5929) over TLS.
 	tls_server_end_point,
-	none,// GSS_C_NO_CHANNEL_BINDINGS, even over TLS
+	none,// no channel bindings, even over TLS
 };
 
 // The hash of gssapi_channel_binding::tls_server_end_point.
@@ -66,6 +67,9 @@ class sasl_gssapi final : public sasl_mechanism
 {
   public:
 	explicit sasl_gssapi(sasl_gssapi_options options = {});
+	// Credentials from a password: `principal` (UTF-8) replaces
+	// options.principal. The `password` parameter is wiped once copied.
+	sasl_gssapi(std::string principal, std::string password, sasl_gssapi_options options = {});
 	~sasl_gssapi() override;
 	sasl_gssapi(sasl_gssapi &&) noexcept;
 	auto operator=(sasl_gssapi &&) noexcept -> sasl_gssapi &;
@@ -78,7 +82,7 @@ class sasl_gssapi final : public sasl_mechanism
 	[[nodiscard]] auto start() -> result<std::optional<std::string>> override;
 	// The next context token, then the wrapped security layer reply.
 	[[nodiscard]] auto step(std::optional<std::string_view> challenge) -> result<std::optional<std::string>> override;
-	// start()'s and step()'s gss_init_sec_context work for another thread.
+	// start()'s and step()'s context establishment work for another thread.
 	[[nodiscard]] auto offload_start() -> sasl_work override;
 	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> sasl_work override;
 	// Succeeds only once the security layer reply was sent.
@@ -96,8 +100,9 @@ class sasl_gssapi final : public sasl_mechanism
 	}
 
   private:
-	struct state;// GSS-API handles; gssapi.h stays out of this header
+	struct state;// the security context; gssapi.h and sspi.h stay out of this header
 	sasl_gssapi_options options_;
+	std::string password_;// empty: none
 	std::string host_;
 	bool tls_ = false;// from prepare()
 	std::string bindings_;// the application data; empty: no bindings
@@ -133,7 +138,7 @@ namespace detail {
 	  gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls, bool require_tls)
 		-> result<std::uint8_t>;
 
-	// From gss_init_sec_context's ret_flags.
+	// The established security context's protection.
 	struct gssapi_context_flags
 	{
 		bool integrity = false;

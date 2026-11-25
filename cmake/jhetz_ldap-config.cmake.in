@@ -18,8 +18,9 @@ include(CMakeFindDependencyMacro)
 find_dependency(ICU 60 COMPONENTS uc data)
 if(@JHETZ_LDAP_PACKAGE_NET@)
     find_dependency(boost_corosio CONFIG)
-    if(jhetz_ldap_gssapi_FOUND)
-        # The same: the target jhetz::ldap links, PkgConfig::JHETZ_LDAP_GSSAPI.
+    if(jhetz_ldap_gssapi_FOUND AND NOT WIN32)
+        # The same: the target jhetz::ldap links, PkgConfig::JHETZ_LDAP_GSSAPI
+        # (on Windows secur32, nothing to find).
         find_dependency(PkgConfig)
         if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
             pkg_search_module(JHETZ_LDAP_GSSAPI IMPORTED_TARGET krb5-gssapi heimdal-gssapi)

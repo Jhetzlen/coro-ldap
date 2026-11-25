@@ -18,10 +18,10 @@ inline void wipe_bytes(void *p, std::size_t n) noexcept
 
 // Wipes a string's whole buffer, also the bytes past size() that a move
 // out of a short (SSO) string leaves behind.
-template<class Traits, class Alloc> void wipe_string(std::basic_string<char, Traits, Alloc> &s) noexcept
+template<class CharT, class Traits, class Alloc> void wipe_string(std::basic_string<CharT, Traits, Alloc> &s) noexcept
 {
 	s.resize(s.capacity());// NOLINT(clang-analyzer-cplusplus.Move): wipes what a move left
-	wipe_bytes(s.data(), s.size());
+	wipe_bytes(s.data(), s.size() * sizeof(CharT));
 	s.clear();
 }
 

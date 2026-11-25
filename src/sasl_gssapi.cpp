@@ -1,21 +1,20 @@
-// SASL GSSAPI client (RFC 4752) over the GSS-API C library. See
-// sasl_gssapi.hpp.
+// SASL GSSAPI client (RFC 4752): the exchange and the security layer over a
+// gssapi_context (sasl_gssapi_context.hpp). See sasl_gssapi.hpp.
 #include "jhetz/ldap/sasl_gssapi.hpp"
 
 #include "jhetz/ldap/ber.hpp"
 
 #include "format_util.hpp"
 #include "icu_util.hpp"
+#include "sasl_gssapi_context.hpp"
 #include "sasl_util.hpp"
 #include "scope_util.hpp"
 
 #include "net/channel_binding.hpp"
 
-#include <gssapi/gssapi.h>
-
 #include <unicode/uchar.h>
+#include <unicode/ustring.h>
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -34,141 +33,90 @@ using detail::input_error;
 using detail::refused;
 namespace {
 
-	// The Kerberos V5 mechanism OID 1.2.840.113554.1.2.2 (RFC 1964), DER.
-	constexpr auto krb5_oid_der =
-	  std::to_array<unsigned char>({ 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 });
-	// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables): GSS-API takes them non-const, never writes
-	auto krb5_oid_bytes = krb5_oid_der;
-	gss_OID_desc krb5_oid{ .length = krb5_oid_bytes.size(), .elements = krb5_oid_bytes.data() };
-	gss_OID_set_desc krb5_oid_set{ .count = 1, .elements = &krb5_oid };
-	// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
+	// Well-formed UTF-8.
+	auto check_utf8(std::string_view s, std::string_view what) -> result<void>
+	{
+		for (std::size_t i = 0; i < s.size();) {
+			const auto [c, n] = detail::utf8_next(s, i);
+			if (c < 0) {
+				return input_error(std::string(what) + " is not valid UTF-8");
+			}
+			i += n;
+		}
+		return {};
+	}
 
-	// GSS_C_CHANNEL_BOUND_FLAG, for libraries that lack it.
-	constexpr OM_uint32 channel_bound_flag = 2048;
+	// A string wiped when destroyed.
+	struct wiped_string
+	{
+		std::string text;
+		explicit wiped_string(std::string_view s) : text(s) {}
+		wiped_string(const wiped_string &) = delete;
+		auto operator=(const wiped_string &) -> wiped_string & = delete;
+		~wiped_string() { detail::wipe_string(text); }
+	};
 
-	// The req_flags a security layer needs: integrity and confidentiality
-	// (the server's offer decides which is used).
-	constexpr OM_uint32 layer_flags = OM_uint32{ GSS_C_INTEG_FLAG } | OM_uint32{ GSS_C_CONF_FLAG };
+	auto as_bytes(std::string_view s) noexcept -> std::span<const std::byte>
+	{
+		return std::as_bytes(std::span(s.data(), s.size()));
+	}
 
-	// Owns a GSS-API handle (a pointer type), released with `Release`.
-	template<class H, auto Release> class gss_handle
+	// The integrity or confidentiality layer of RFC 4752 section 3.1, owning
+	// the security context.
+	class gssapi_layer final : public sasl_security_layer
 	{
 	  public:
-		gss_handle() = default;
-		gss_handle(const gss_handle &) = delete;
-		auto operator=(const gss_handle &) -> gss_handle & = delete;
-		~gss_handle() { reset(); }
+		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+		gssapi_layer(detail::gssapi_context context,
+		  bool confidentiality,
+		  std::size_t max_wrap_input,
+		  std::size_t max_received)
+		  // NOLINTEND(bugprone-easily-swappable-parameters)
+		  : context_(std::move(context)), confidentiality_(confidentiality), max_wrap_input_(max_wrap_input),
+			max_received_(max_received)
+		{}
 
-		[[nodiscard]] auto get() const noexcept -> H { return h_; }
-		// For a call that creates the handle: releases the current one.
-		auto out() noexcept -> H *
+		[[nodiscard]] auto protection() const noexcept -> sasl_protection override
 		{
-			reset();
-			return &h_;
+			return confidentiality_ ? sasl_protection::confidentiality : sasl_protection::integrity;
 		}
-		// For a call that updates the handle in place (gss_init_sec_context).
-		auto in_out() noexcept -> H * { return &h_; }
-		// Hands the handle over (to another owner); null from then on.
-		[[nodiscard]] auto release() noexcept -> H { return std::exchange(h_, nullptr); }
-		// Takes ownership of `h`.
-		void adopt(H h) noexcept
+		[[nodiscard]] auto max_wrap_input() const noexcept -> std::size_t override { return max_wrap_input_; }
+		[[nodiscard]] auto max_received() const noexcept -> std::size_t override { return max_received_; }
+
+		[[nodiscard]] auto wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
+		  -> result<void> override
 		{
-			reset();
-			h_ = h;
+			return context_.wrap(plaintext, confidentiality_, out);
 		}
-		void reset() noexcept
+
+		[[nodiscard]] auto unwrap(std::span<const std::byte> buffer, std::pmr::vector<std::byte> &out)
+		  -> result<void> override
 		{
-			if (h_ == nullptr) {
-				return;
+			const std::size_t before = out.size();
+			bool confidential = false;
+			if (auto r = context_.unwrap(buffer, out, confidential); !r) {
+				return r;
 			}
-			OM_uint32 minor = 0;
-			Release(&minor, &h_);
-			h_ = nullptr;
+			// A confidentiality layer refuses a buffer without confidentiality.
+			if (confidentiality_ && !confidential) {
+				out.resize(before);
+				return refused("a buffer without confidentiality on a confidentiality layer");
+			}
+			return {};
 		}
 
 	  private:
-		H h_ = nullptr;
+		detail::gssapi_context context_;
+		bool confidentiality_;
+		std::size_t max_wrap_input_;
+		std::size_t max_received_;
 	};
 
-	constexpr auto delete_context = [](OM_uint32 *minor, gss_ctx_id_t *c) {
-		return gss_delete_sec_context(minor, c, GSS_C_NO_BUFFER);
-	};
-	using name_handle = gss_handle<gss_name_t, &gss_release_name>;
-	using cred_handle = gss_handle<gss_cred_id_t, &gss_release_cred>;
-	using context_handle = gss_handle<gss_ctx_id_t, delete_context>;
+}// namespace
 
-	// A buffer the GSS-API library allocated (output tokens, messages).
-	struct output_buffer
-	{
-		gss_buffer_desc desc{ .length = 0, .value = nullptr };
-		output_buffer() = default;
-		output_buffer(const output_buffer &) = delete;
-		auto operator=(const output_buffer &) -> output_buffer & = delete;
-		~output_buffer()
-		{
-			OM_uint32 minor = 0;
-			if (desc.value != nullptr) {
-				gss_release_buffer(&minor, &desc);
-			}
-		}
-		[[nodiscard]] auto view() const noexcept -> std::string_view
-		{
-			return desc.value == nullptr ? std::string_view()
-										 : std::string_view(static_cast<const char *>(desc.value), desc.length);
-		}
-	};
+namespace detail {
 
-	// An input buffer over caller memory (GSS-API takes non-const pointers
-	// but does not write through input buffers).
-	auto input(std::string_view s) noexcept -> gss_buffer_desc
-	{
-		// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): input buffers are never written (see above)
-		return gss_buffer_desc{ .length = s.size(), .value = const_cast<char *>(s.data()) };
-	}
-
-	// gss_display_status's messages for one status value, joined with "; ".
-	auto status_text(OM_uint32 status, int type) -> std::string
-	{
-		std::string out;
-		OM_uint32 message_context = 0;
-		do {
-			OM_uint32 minor = 0;
-			output_buffer message;
-			const OM_uint32 major = gss_display_status(&minor,
-			  status,
-			  type,
-			  type == GSS_C_MECH_CODE ? &krb5_oid : GSS_C_NO_OID,
-			  &message_context,
-			  &message.desc);
-			if (GSS_ERROR(major) != 0) {
-				break;
-			}
-			if (!out.empty()) {
-				out += "; ";
-			}
-			// Messages may quote names from the KDC or the server.
-			detail::append_sanitized(out, message.view(), 256);
-		} while (message_context != 0);
-		return out;
-	}
-
-	auto gss_failure(std::string_view call, OM_uint32 major, OM_uint32 minor) -> std::unexpected<error>
-	{
-		std::string text(call);
-		text += ": ";
-		text += status_text(major, GSS_C_GSS_CODE);
-		if (minor != 0) {
-			if (const auto m = status_text(minor, GSS_C_MECH_CODE); !m.empty()) {
-				text += " (";
-				text += m;
-				text += ')';
-			}
-		}
-		return fail(client_errc::gssapi_failure, text);
-	}
-
-	// Well-formed UTF-8 without control characters (Cc).
-	auto check_text(std::string_view s, std::string_view what) -> result<void>
+	auto gssapi_check_text(std::string_view s, std::string_view what) -> result<void>
 	{
 		for (std::size_t i = 0; i < s.size();) {
 			const auto [c, n] = detail::utf8_next(s, i);
@@ -183,104 +131,73 @@ namespace {
 		return {};
 	}
 
-	auto import_name(std::string_view text, gss_OID type, name_handle &name) -> result<void>
+	auto utf8_to_utf16(std::string_view s, std::string_view what) -> result<std::u16string>
 	{
-		OM_uint32 minor = 0;
-		gss_buffer_desc in = input(text);
-		const OM_uint32 major = gss_import_name(&minor, &in, type, name.out());
-		if (GSS_ERROR(major) != 0) {
-			return gss_failure("gss_import_name", major, minor);
+		if (s.size() > static_cast<std::size_t>(INT32_MAX)) {
+			return input_error(std::string(what) + " is too long");
 		}
-		return {};
+		std::vector<UChar> units;
+		const scope_exit wipe{ [&units] noexcept { wipe_vector(units); } };
+		const UErrorCode status = to_utf16(s, units);
+		if (is_invalid_utf8(status)) {
+			return input_error(std::string(what) + " is not valid UTF-8");
+		}
+		if (icu_failed(status)) {
+			return library_error(std::string(what) + ": UTF-16 conversion failed (ICU " + u_errorName(status) + ")");
+		}
+		return std::u16string(units.begin(), units.end());
 	}
 
-	// The supplementary statuses of a replayed, old or out-of-order buffer (RFC
-	// 2744 section 3.9.1).
-	constexpr OM_uint32 sequence_problems =
-	  GSS_S_DUPLICATE_TOKEN | GSS_S_OLD_TOKEN | GSS_S_UNSEQ_TOKEN | GSS_S_GAP_TOKEN;
-
-	// The integrity or confidentiality layer of RFC 4752 section 3.1, owning
-	// the security context.
-	class gssapi_layer final : public sasl_security_layer
+	sspi_identity::~sspi_identity()
 	{
-	  public:
-		// Takes over `context` once allocated.
-		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
-		gssapi_layer(context_handle &context,
-		  bool confidentiality,
-		  std::size_t max_wrap_input,
-		  std::size_t max_received)
-		  // NOLINTEND(bugprone-easily-swappable-parameters)
-		  : confidentiality_(confidentiality), max_wrap_input_(max_wrap_input), max_received_(max_received)
-		{
-			context_.adopt(context.release());
+		wipe_string(user);
+		wipe_string(domain);
+		wipe_string(password);
+	}
+
+	auto make_sspi_identity(std::string_view principal, std::string_view password) -> result<sspi_identity>
+	{
+		std::string_view user = principal;
+		std::string_view domain;
+		if (const auto slash = principal.find('\\'); slash != std::string_view::npos) {
+			domain = principal.substr(0, slash);
+			user = principal.substr(slash + 1);
+		} else if (const auto at = principal.rfind('@'); at != std::string_view::npos) {
+			user = principal.substr(0, at);
+			domain = principal.substr(at + 1);
 		}
-
-		[[nodiscard]] auto protection() const noexcept -> sasl_protection override
-		{
-			return confidentiality_ ? sasl_protection::confidentiality : sasl_protection::integrity;
+		if (user.empty()) {
+			return input_error("principal has no user name");
 		}
-		[[nodiscard]] auto max_wrap_input() const noexcept -> std::size_t override { return max_wrap_input_; }
-		[[nodiscard]] auto max_received() const noexcept -> std::size_t override { return max_received_; }
-
-		[[nodiscard]] auto wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
-		  -> result<void> override
-		{
-			OM_uint32 minor = 0;
-			gss_buffer_desc in = input(detail::as_text(plaintext));
-			output_buffer wrapped;
-			int conf_state = 0;
-			const OM_uint32 major = gss_wrap(
-			  &minor, context_.get(), confidentiality_ ? 1 : 0, GSS_C_QOP_DEFAULT, &in, &conf_state, &wrapped.desc);
-			if (GSS_ERROR(major) != 0) {
-				return gss_failure("gss_wrap", major, minor);
-			}
-			if (confidentiality_ && conf_state == 0) {
-				return fail(client_errc::gssapi_failure, "gss_wrap: no confidentiality applied");
-			}
-			append(out, wrapped.view());
-			return {};
+		sspi_identity id;
+		auto u = utf8_to_utf16(user, "principal");
+		if (!u) {
+			return std::unexpected(std::move(u.error()));
 		}
-
-		[[nodiscard]] auto unwrap(std::span<const std::byte> buffer, std::pmr::vector<std::byte> &out)
-		  -> result<void> override
-		{
-			OM_uint32 minor = 0;
-			gss_buffer_desc in = input(detail::as_text(buffer));
-			output_buffer plain;
-			int conf_state = 0;
-			const OM_uint32 major = gss_unwrap(&minor, context_.get(), &in, &plain.desc, &conf_state, nullptr);
-			if (GSS_ERROR(major) != 0) {
-				return gss_failure("gss_unwrap", major, minor);
-			}
-			if ((major & sequence_problems) != 0) {
-				return fail(client_errc::gssapi_failure,
-				  "gss_unwrap: a buffer replayed or out of sequence: " + status_text(major, GSS_C_GSS_CODE));
-			}
-			// A confidentiality layer refuses a buffer without confidentiality.
-			if (confidentiality_ && conf_state == 0) {
-				return refused("a buffer without confidentiality on a confidentiality layer");
-			}
-			append(out, plain.view());
-			return {};
+		id.user = std::move(*u);
+		auto d = utf8_to_utf16(domain, "principal");
+		if (!d) {
+			return std::unexpected(std::move(d.error()));
 		}
-
-	  private:
-		static void append(std::pmr::vector<std::byte> &out, std::string_view bytes)
-		{
-			const auto *p = reinterpret_cast<const std::byte *>(bytes.data());
-			out.insert(out.end(), p, p + bytes.size());
+		id.domain = std::move(*d);
+		auto p = utf8_to_utf16(password, "password");
+		if (!p) {
+			return std::unexpected(std::move(p.error()));
 		}
+		id.password = std::move(*p);
+		return id;
+	}
 
-		context_handle context_;
-		bool confidentiality_;
-		std::size_t max_wrap_input_;
-		std::size_t max_received_;
-	};
-
-}// namespace
-
-namespace detail {
+	auto sspi_target_name(std::string_view target) -> result<std::u16string>
+	{
+		std::string name(target);
+		if (name.find('/') == std::string::npos) {
+			if (const auto at = name.find('@'); at != std::string::npos) {
+				name[at] = '/';
+			}
+		}
+		return utf8_to_utf16(name, "target");
+	}
 
 	auto parse_gssapi_layer_offer(std::string_view message) -> result<gssapi_layer_offer>
 	{
@@ -374,7 +291,7 @@ namespace detail {
 			return input_error(
 			  detail::format("maximum buffer size {} out of range (1 to {})", max_size, gssapi_max_buffer_limit));
 		}
-		if (auto c = check_text(authz_id, "authorization identity"); !c) {
+		if (auto c = gssapi_check_text(authz_id, "authorization identity"); !c) {
 			return std::unexpected(std::move(c.error()));
 		}
 		constexpr unsigned byte_bits = 8;
@@ -428,11 +345,9 @@ struct sasl_gssapi::state
 	// Set while a step runs on sasl_bind's thread (offload_start,
 	// offload_step): the mechanism leaves the state alone until it clears.
 	std::atomic<bool> busy{ false };
-	name_handle target;
-	cred_handle credentials;
-	context_handle context;
+	detail::gssapi_context context;
 	// The channel bindings' application data (empty: none), the same for
-	// every gss_init_sec_context call of the exchange.
+	// every context establishment call of the exchange.
 	std::string bindings;
 	// The security layer to select, the maximum buffer size to announce
 	// with one and require_tls (sasl_gssapi_options), and whether TLS is
@@ -441,12 +356,14 @@ struct sasl_gssapi::state
 	std::uint32_t max_receive_size = 0;
 	bool require_tls = true;
 	bool tls = false;
-	// The flags of the established context (gss_init_sec_context's
-	// ret_flags).
-	OM_uint32 context_flags = 0;
 	// The layer reply() selected (integrity or confidentiality), owning the
 	// context, until take_security_layer() hands it over.
 	std::unique_ptr<sasl_security_layer> layer;
+
+	state() = default;
+	state(const state &) = delete;
+	auto operator=(const state &) -> state & = delete;
+	~state() = default;
 
 	// Clears `busy` when the returned guard goes out of scope: at the end of
 	// an offloaded step, whatever its outcome.
@@ -458,59 +375,21 @@ struct sasl_gssapi::state
 	void reset() noexcept
 	{
 		at = phase::idle;
-		context_flags = 0;
 		layer.reset();
 		context.reset();
-		credentials.reset();
-		target.reset();
 	}
 
-	// One gss_init_sec_context call, with the server's token (none at first).
+	// One context establishment call, with the server's token (none at first).
 	auto init(std::optional<std::string_view> token) -> result<std::optional<std::string>>
 	{
-		OM_uint32 minor = 0;
-		gss_buffer_desc in = input(token.value_or(std::string_view()));
-		output_buffer out;
-		OM_uint32 flags = 0;
-		// RFC 2744 section 3.11: no addresses, the TLS binding as application data.
-		gss_channel_bindings_struct channel{ .initiator_addrtype = GSS_C_AF_UNSPEC,
-			.initiator_address = { .length = 0, .value = nullptr },
-			.acceptor_addrtype = GSS_C_AF_UNSPEC,
-			.acceptor_address = { .length = 0, .value = nullptr },
-			.application_data = input(bindings) };
-		const OM_uint32 major = gss_init_sec_context(&minor,
-		  credentials.get(),
-		  context.in_out(),
-		  target.get(),
-		  &krb5_oid,
-		  // With bindings, the client says it binds (channel_bound_flag);
-		  // with a layer to select, integrity and confidentiality.
-		  GSS_C_MUTUAL_FLAG | GSS_C_SEQUENCE_FLAG | (bindings.empty() ? 0 : channel_bound_flag)
-			| (requested_layer == gssapi_security_layer::none ? OM_uint32{ 0 } : layer_flags),
-		  0,
-		  bindings.empty() ? GSS_C_NO_CHANNEL_BINDINGS : &channel,
-		  token ? &in : GSS_C_NO_BUFFER,
-		  nullptr,
-		  &out.desc,
-		  &flags,
-		  nullptr);
-		if (GSS_ERROR(major) != 0) {
+		auto out = context.init(token);
+		if (!out) {
 			reset();
-			return gss_failure("gss_init_sec_context", major, minor);
+			return std::unexpected(std::move(out.error()));
 		}
-		if ((major & GSS_S_CONTINUE_NEEDED) != 0) {
-			at = phase::negotiating;
-		} else {
-			if ((flags & GSS_C_MUTUAL_FLAG) == 0) {
-				reset();
-				return fail(client_errc::gssapi_failure,
-				  "gss_init_sec_context: no mutual authentication (the server was not authenticated)");
-			}
-			at = phase::established;
-			context_flags = flags;
-		}
+		at = context.established() ? phase::established : phase::negotiating;
 		// RFC 4752 section 3.1: the output token, possibly empty.
-		return std::optional<std::string>(std::string(out.view()));
+		return std::optional<std::string>(std::move(*out));
 	}
 
 	// The server's wrapped offer gives the wrapped reply; with a layer
@@ -518,14 +397,12 @@ struct sasl_gssapi::state
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto reply(std::string_view wrapped_offer, std::string_view authz_id) -> result<std::optional<std::string>>
 	{
-		OM_uint32 minor = 0;
-		gss_buffer_desc in = input(wrapped_offer);
-		output_buffer offer_text;
-		OM_uint32 major = gss_unwrap(&minor, context.get(), &in, &offer_text.desc, nullptr, nullptr);
-		if (GSS_ERROR(major) != 0) {
-			return gss_failure("gss_unwrap", major, minor);
+		std::pmr::vector<std::byte> offer_text;
+		bool confidential = false;
+		if (auto u = context.unwrap(as_bytes(wrapped_offer), offer_text, confidential); !u) {
+			return std::unexpected(std::move(u.error()));
 		}
-		auto offer = detail::parse_gssapi_layer_offer(offer_text.view());
+		auto offer = detail::parse_gssapi_layer_offer(detail::as_text(offer_text));
 		if (!offer) {
 			return std::unexpected(std::move(offer.error()));
 		}
@@ -533,11 +410,19 @@ struct sasl_gssapi::state
 		if (!selected) {
 			return std::unexpected(std::move(selected.error()));
 		}
+		const bool confidentiality = *selected == detail::gssapi_confidentiality;
 		std::size_t max_wrap_input = 0;
 		if (*selected != detail::gssapi_no_layer) {
-			auto limit = wrap_limit(*selected == detail::gssapi_confidentiality, offer->max_size);
+			if (auto c = detail::gssapi_check_context_flags(context.flags(), confidentiality); !c) {
+				return std::unexpected(std::move(c.error()));
+			}
+			auto limit = context.wrap_size_limit(confidentiality, offer->max_size);
 			if (!limit) {
 				return std::unexpected(std::move(limit.error()));
+			}
+			if (*limit == 0) {
+				return refused(
+				  detail::format("the server's maximum buffer size, {}, leaves no room for data", offer->max_size));
 			}
 			max_wrap_input = *limit;
 		}
@@ -545,48 +430,24 @@ struct sasl_gssapi::state
 		if (!text) {
 			return std::unexpected(std::move(text.error()));
 		}
-		// RFC 4752 section 3.1: wrapped with conf_flag FALSE.
-		gss_buffer_desc reply_in = input(*text);
-		output_buffer wrapped;
-		major = gss_wrap(&minor, context.get(), 0, GSS_C_QOP_DEFAULT, &reply_in, nullptr, &wrapped.desc);
-		if (GSS_ERROR(major) != 0) {
-			return gss_failure("gss_wrap", major, minor);
+		// RFC 4752 section 3.1: wrapped without confidentiality.
+		std::pmr::vector<std::byte> wrapped;
+		if (auto w = context.wrap(as_bytes(*text), false, wrapped); !w) {
+			return std::unexpected(std::move(w.error()));
 		}
-		std::string out(wrapped.view());
+		std::string out(detail::as_text(wrapped));
 		if (*selected != detail::gssapi_no_layer) {
-			layer = std::make_unique<gssapi_layer>(
-			  context, *selected == detail::gssapi_confidentiality, max_wrap_input, max_receive_size);
+			layer =
+			  std::make_unique<gssapi_layer>(std::move(context), confidentiality, max_wrap_input, max_receive_size);
 		}
 		at = phase::replied;
 		return std::optional<std::string>(std::move(out));
 	}
 
-	// The most plaintext gss_wrap turns into at most `max_size` octets, after
-	// checking the context's flags for the layer.
-	auto wrap_limit(bool confidentiality, std::uint32_t max_size) const -> result<std::size_t>
-	{
-		const detail::gssapi_context_flags provided{ .integrity = (context_flags & GSS_C_INTEG_FLAG) != 0,
-			.confidentiality = (context_flags & GSS_C_CONF_FLAG) != 0,
-			.sequence = (context_flags & GSS_C_SEQUENCE_FLAG) != 0 };
-		if (auto c = detail::gssapi_check_context_flags(provided, confidentiality); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		OM_uint32 minor = 0;
-		OM_uint32 max_input = 0;
-		const OM_uint32 major =
-		  gss_wrap_size_limit(&minor, context.get(), confidentiality ? 1 : 0, GSS_C_QOP_DEFAULT, max_size, &max_input);
-		if (GSS_ERROR(major) != 0) {
-			return gss_failure("gss_wrap_size_limit", major, minor);
-		}
-		if (max_input == 0) {
-			return refused(detail::format("the server's maximum buffer size, {}, leaves no room for data", max_size));
-		}
-		return std::size_t{ max_input };
-	}
-
-	// The first token: names imported, credentials acquired (for a given
-	// principal), first gss_init_sec_context call.
-	auto begin(const sasl_gssapi_options &options, std::string_view host) -> result<std::optional<std::string>>
+	// The first token: names and credentials, then the first context
+	// establishment call.
+	auto begin(const sasl_gssapi_options &options, std::string_view password, std::string_view host)
+	  -> result<std::optional<std::string>>
 	{
 		std::string target_name = options.target;
 		if (target_name.empty()) {
@@ -597,14 +458,20 @@ struct sasl_gssapi::state
 			target_name = "ldap@";
 			target_name += host;
 		}
-		if (auto c = check_text(target_name, "target"); !c) {
+		if (auto c = detail::gssapi_check_text(target_name, "target"); !c) {
 			return std::unexpected(std::move(c.error()));
 		}
-		if (auto c = check_text(options.principal, "principal"); !c) {
+		if (auto c = detail::gssapi_check_text(options.principal, "principal"); !c) {
 			return std::unexpected(std::move(c.error()));
 		}
-		if (auto c = check_text(options.authz_id, "authorization identity"); !c) {
+		if (auto c = detail::gssapi_check_text(options.authz_id, "authorization identity"); !c) {
 			return std::unexpected(std::move(c.error()));
+		}
+		if (auto c = check_utf8(password, "password"); !c) {
+			return std::unexpected(std::move(c.error()));
+		}
+		if (!password.empty() && options.principal.empty()) {
+			return input_error("a password without a principal");
 		}
 		if (options.security_layer != gssapi_security_layer::none
 			&& (options.max_receive_size == 0 || options.max_receive_size > gssapi_max_buffer_limit)) {
@@ -615,27 +482,14 @@ struct sasl_gssapi::state
 		max_receive_size = options.max_receive_size;
 		require_tls = options.require_tls;
 
-		if (auto n = import_name(target_name, GSS_C_NT_HOSTBASED_SERVICE, target); !n) {
-			return std::unexpected(std::move(n.error()));
-		}
-		if (!options.principal.empty()) {
-			name_handle principal;
-			if (auto n = import_name(options.principal, GSS_C_NT_USER_NAME, principal); !n) {
-				return std::unexpected(std::move(n.error()));
-			}
-			OM_uint32 minor = 0;
-			const OM_uint32 major = gss_acquire_cred(&minor,
-			  principal.get(),
-			  GSS_C_INDEFINITE,
-			  &krb5_oid_set,
-			  GSS_C_INITIATE,
-			  credentials.out(),
-			  nullptr,
-			  nullptr);
-			if (GSS_ERROR(major) != 0) {
-				reset();
-				return gss_failure("gss_acquire_cred", major, minor);
-			}
+		const detail::gssapi_request request{ .target = target_name,
+			.principal = options.principal,
+			.password = password,
+			.bindings = bindings,
+			.layer = requested_layer != gssapi_security_layer::none };
+		if (auto a = context.acquire(request); !a) {
+			reset();
+			return std::unexpected(std::move(a.error()));
 		}
 		return init(std::nullopt);
 	}
@@ -644,9 +498,38 @@ struct sasl_gssapi::state
 sasl_gssapi::sasl_gssapi(sasl_gssapi_options options) : options_(std::move(options)), state_(std::make_shared<state>())
 {}
 
-sasl_gssapi::~sasl_gssapi() = default;
-sasl_gssapi::sasl_gssapi(sasl_gssapi &&) noexcept = default;
-auto sasl_gssapi::operator=(sasl_gssapi &&) noexcept -> sasl_gssapi & = default;
+sasl_gssapi::sasl_gssapi(std::string principal, std::string password, sasl_gssapi_options options)
+  : options_(std::move(options)), password_(password), state_(std::make_shared<state>())
+{
+	detail::wipe_string(password);
+	options_.principal = std::move(principal);
+}
+
+sasl_gssapi::~sasl_gssapi() { detail::wipe_string(password_); }
+
+sasl_gssapi::sasl_gssapi(sasl_gssapi &&other) noexcept
+  : options_(std::move(other.options_)), password_(other.password_), host_(std::move(other.host_)), tls_(other.tls_),
+	bindings_(std::move(other.bindings_)), binding_error_(std::move(other.binding_error_)),
+	state_(std::move(other.state_))
+{
+	detail::wipe_string(other.password_);
+}
+
+auto sasl_gssapi::operator=(sasl_gssapi &&other) noexcept -> sasl_gssapi &
+{
+	if (this != &other) {
+		options_ = std::move(other.options_);
+		detail::wipe_string(password_);
+		password_ = other.password_;
+		detail::wipe_string(other.password_);
+		host_ = std::move(other.host_);
+		tls_ = other.tls_;
+		bindings_ = std::move(other.bindings_);
+		binding_error_ = std::move(other.binding_error_);
+		state_ = std::move(other.state_);
+	}
+	return *this;
+}
 
 void sasl_gssapi::prepare(const sasl_bind_context &context)
 {
@@ -679,15 +562,17 @@ auto sasl_gssapi::offload_start() -> sasl_work
 	s->bindings = bindings_;
 	s->tls = tls_;
 	state_ = s;
-	return [s, options = options_, host = host_] {
+	// The password goes along by shared_ptr: no copy left behind unwiped.
+	auto password = std::make_shared<const wiped_string>(password_);
+	return [s, options = options_, password = std::move(password), host = host_] {
 		const auto scope = s->busy_scope();
-		return s->begin(options, host);
+		return s->begin(options, password->text, host);
 	};
 }
 
 auto sasl_gssapi::offload_step(std::optional<std::string_view> challenge) -> sasl_work
 {
-	// Only gss_init_sec_context may block; step() handles the rest
+	// Only the context establishment may block; step() handles the rest
 	// (the security layer reply, errors) on the I/O thread.
 	if (state_ == nullptr || state_->busy.load(std::memory_order_acquire) || state_->at != state::phase::negotiating
 		|| !challenge) {

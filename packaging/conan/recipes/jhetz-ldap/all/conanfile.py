@@ -68,11 +68,10 @@ class JhetzLdapConan(ConanFile):
             raise ConanInvalidConfiguration(f"{self.ref} needs {compiler} {minimum} or newer")
         if self.options.shared:
             raise ConanInvalidConfiguration(f"{self.ref} builds static libraries only")
-        if self.options.get_safe("gssapi") and self.settings.os == "Windows":
-            raise ConanInvalidConfiguration(f"{self.ref}: gssapi is not supported on Windows")
 
     def system_requirements(self):
-        if not self.options.get_safe("gssapi"):
+        # On Windows, SSPI is part of the OS.
+        if not self.options.get_safe("gssapi") or self.settings.os == "Windows":
             return
         Apt(self).install(["libkrb5-dev", "pkg-config"])
         Dnf(self).install(["krb5-devel", "pkgconf"])
@@ -110,6 +109,9 @@ class JhetzLdapConan(ConanFile):
         rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
 
     def _gssapi_libs(self, component):
+        if self.settings.os == "Windows":
+            component.system_libs.append("secur32")
+            return
         for module in ("krb5-gssapi", "heimdal-gssapi"):
             try:
                 pc = PkgConfig(self, module)

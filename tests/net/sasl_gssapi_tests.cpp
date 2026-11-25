@@ -1,5 +1,6 @@
 // SASL GSSAPI without a KDC: the RFC 4752 security layer messages and the
 // failures before anything is sent.
+#include "../../src/sasl_gssapi_context.hpp"
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl.hpp"
@@ -28,6 +29,14 @@ using Catch::Matchers::StartsWith;
 using ldap::detail::gssapi_layer_offer;
 
 namespace {
+
+// The backend's context establishment call.
+#ifdef _WIN32
+constexpr bool sspi = true;
+#else
+constexpr bool sspi = false;
+#endif
+constexpr std::string_view init_call = sspi ? "InitializeSecurityContextW: " : "gss_init_sec_context: ";
 
 // Sets an environment variable for the scope of a test, then restores it.
 class scoped_env
@@ -255,6 +264,15 @@ TEST_CASE("gssapi: invalid names are refused before anything is sent", "[net][sa
 	refused({ .target = "ldap@\xFF", .require_tls = false }, "target is not valid UTF-8");
 	refused({ .principal = "jdoe\r\n@EXAMPLE.ORG", .require_tls = false }, "principal contains a control character");
 	refused({ .authz_id = "dn:\xE2\x82", .require_tls = false }, "authorization identity is not valid UTF-8");
+	const auto refused_password = [&m](std::string principal, std::string password, std::string_view what) {
+		ldap::sasl_gssapi mech(std::move(principal), std::move(password), { .require_tls = false });
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::encode_error);
+		CHECK(std::string(r.error().context) == "sasl bind GSSAPI: " + std::string(what));
+	};
+	refused_password("jdoe", "pw\xC3", "password is not valid UTF-8");
+	refused_password("", "pw", "a password without a principal");
 	refused({ .security_layer = ldap::gssapi_security_layer::integrity, .max_receive_size = 0 },
 	  "max_receive_size 0 out of range (1 to 16777215)");
 	refused({ .security_layer = ldap::gssapi_security_layer::best_offered, .max_receive_size = 0x1000000 },
@@ -279,11 +297,13 @@ TEST_CASE("gssapi: GSS-API errors carry its status messages", "[net][sasl][gssap
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
 		CHECK(r.error().code == ldap::cond::auth_failed);
-		// The major status message, then the mechanism's (minor) one.
-		CHECK_THAT(std::string(r.error().context), StartsWith("sasl bind GSSAPI: gss_init_sec_context: "));
-		CHECK_THAT(std::string(r.error().context), ContainsSubstring("credentials"));
-		CHECK_THAT(
-		  std::string(r.error().context), ContainsSubstring("(") && ContainsSubstring("jhetz-ldap-test-ccache"));
+		CHECK_THAT(std::string(r.error().context), StartsWith("sasl bind GSSAPI: " + std::string(init_call)));
+		if (!sspi) {
+			// The major status message, then the mechanism's (minor) one.
+			CHECK_THAT(std::string(r.error().context), ContainsSubstring("credentials"));
+			CHECK_THAT(
+			  std::string(r.error().context), ContainsSubstring("(") && ContainsSubstring("jhetz-ldap-test-ccache"));
+		}
 	}
 	SECTION("an explicit principal, UTF-8")
 	{
@@ -292,7 +312,22 @@ TEST_CASE("gssapi: GSS-API errors carry its status messages", "[net][sasl][gssap
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
-		CHECK_THAT(std::string(r.error().context), StartsWith("sasl bind GSSAPI: gss_acquire_cred: "));
+		if (!sspi) {
+			CHECK_THAT(std::string(r.error().context), StartsWith("sasl bind GSSAPI: gss_acquire_cred: "));
+		}
+	}
+	SECTION("a principal and a password, UTF-8")
+	{
+		ldap::sasl_gssapi mech("j\xC3\xB6rg@EXAMPLE.ORG",
+		  "p\xC3\xA4ssw\xC3\xB6rd",
+		  { .target = "ldap@dc1.example.org", .require_tls = false });
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
+		if (!sspi) {
+			CHECK_THAT(
+			  std::string(r.error().context), StartsWith("sasl bind GSSAPI: gss_acquire_cred_with_password: "));
+		}
 	}
 	CHECK(m.conn.is_open());
 	m.check_server();
@@ -371,7 +406,7 @@ TEST_CASE("gssapi: offloaded steps", "[net][sasl][gssapi]")
 		auto r = work();
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
-		CHECK_THAT(std::string(r.error().context), StartsWith("gss_init_sec_context: "));
+		CHECK_THAT(std::string(r.error().context), StartsWith(std::string(init_call)));
 	}
 	SECTION("steps while the work runs are refused; start() begins anew")
 	{
@@ -473,7 +508,7 @@ TEST_CASE("gssapi: channel_binding_used says whether the exchange binds", "[net]
 		auto r = mech.start();
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
-		CHECK_THAT(std::string(r.error().context), StartsWith("gss_init_sec_context: "));
+		CHECK_THAT(std::string(r.error().context), StartsWith(std::string(init_call)));
 		// The next bind, without TLS, has none.
 		mech.prepare({ .host = "dc1.example.org" });
 		CHECK_FALSE(mech.channel_binding_used().has_value());
@@ -516,4 +551,58 @@ TEST_CASE("gssapi: channel_binding_used says whether the exchange binds", "[net]
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);// the GSS-API call was made
 	}
+}
+
+TEST_CASE("gssapi: UTF-8 to UTF-16", "[net][sasl][gssapi][sspi]")
+{
+	using ldap::detail::utf8_to_utf16;
+	CHECK(utf8_to_utf16("", "x") == u"");
+	CHECK(utf8_to_utf16("j\xC3\xB6rg", "x") == u"j\u00F6rg");
+	// Outside the BMP: a surrogate pair.
+	CHECK(utf8_to_utf16("\xF0\x9F\x94\x91 key", "x") == u"\U0001F511 key");
+	CHECK(utf8_to_utf16("\xE6\x97\xA5\xE6\x9C\xAC", "x") == u"\u65E5\u672C");
+	for (const auto bad : { "\xFF"sv, "\xC3"sv, "\xC0\xAF"sv, "\xED\xA0\x80"sv, "\xF4\x90\x80\x80"sv }) {
+		auto r = utf8_to_utf16(bad, "password");
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::encode_error);
+		CHECK(r.error().context == "password is not valid UTF-8");
+	}
+}
+
+TEST_CASE("gssapi: the SSPI identity of a principal and password", "[net][sasl][gssapi][sspi]")
+{
+	using ldap::detail::make_sspi_identity;
+	using fields = std::array<std::u16string, 3>;
+	const auto identity = [](std::string_view principal, std::string_view password) {
+		auto id = make_sspi_identity(principal, password);
+		REQUIRE(id.has_value());
+		return fields{ id->user, id->domain, id->password };
+	};
+	CHECK(identity("jdoe@EXAMPLE.ORG", "pw") == fields{ u"jdoe", u"EXAMPLE.ORG", u"pw" });
+	CHECK(identity("EXAMPLE\\jdoe", "") == fields{ u"jdoe", u"EXAMPLE", u"" });
+	CHECK(identity("jdoe", "") == fields{ u"jdoe", u"", u"" });
+	// The last '@' separates the domain.
+	CHECK(identity("j.doe@corp@EXAMPLE.ORG", "") == fields{ u"j.doe@corp", u"EXAMPLE.ORG", u"" });
+	CHECK(identity("J\xC3\xB6rg@\xC3\x9C"
+				   "BER.EXAMPLE",
+			"p\xC3\xA4ss\xF0\x9F\x94\x91")
+		  == fields{ u"J\u00F6rg",
+			u"\u00DC"
+			u"BER.EXAMPLE",
+			u"p\u00E4ss\U0001F511" });
+	auto empty = make_sspi_identity("@EXAMPLE.ORG", "pw");
+	REQUIRE_FALSE(empty.has_value());
+	CHECK(empty.error().context == "principal has no user name");
+	auto bad = make_sspi_identity("jdoe", "\xFF");
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().context == "password is not valid UTF-8");
+}
+
+TEST_CASE("gssapi: the SSPI target name", "[net][sasl][gssapi][sspi]")
+{
+	using ldap::detail::sspi_target_name;
+	CHECK(sspi_target_name("ldap@dc1.example.org") == u"ldap/dc1.example.org");
+	CHECK(sspi_target_name("ldap/dc1.example.org") == u"ldap/dc1.example.org");
+	CHECK(sspi_target_name("ldap/dc1.example.org@EXAMPLE.ORG") == u"ldap/dc1.example.org@EXAMPLE.ORG");
+	CHECK(sspi_target_name("ldap@d\xC3\xBC.example") == u"ldap/d\u00FC.example");
 }
