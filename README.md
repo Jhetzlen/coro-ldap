@@ -152,7 +152,15 @@ conan remote add coro-ldap ./coro-ldap/packaging/conan --type=local-recipes-inde
 ```
 
 and `jhetz-ldap/0.2.0` under `[requires]` in your `conanfile.txt` (with the
-`CMakeDeps` and `CMakeToolchain` generators). Both give the CMake package:
+`CMakeDeps` and `CMakeToolchain` generators). The library needs C++23, which
+`conan profile detect` does not select, so pass it (or set `compiler.cppstd=23`
+in your profile):
+
+```sh
+conan install . --build=missing -s compiler.cppstd=23
+```
+
+Both give the CMake package:
 
 ```cmake
 find_package(jhetz_ldap 0.2 REQUIRED)
