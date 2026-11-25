@@ -3076,6 +3076,14 @@ lose the connection along with the error.
   evaluation, `constexpr_utf8_sequence_length` in attribute.hpp), since ICU's
   functions cannot run there and its `U8_NEXT` macro would need ICU's
   headers in the public ones; a test checks it answers as ICU does.
+- Linkage: static by default, shared with `BUILD_SHARED_LIBS` (SONAME per
+  0.x minor version). jhetz_ldap, Capy and Corosio are all static or all
+  shared, never a shared jhetz_ldap embedding a static Corosio, which
+  would duplicate Corosio's and Capy's process-wide state (service
+  registries, the SNI index, thread-locals). Windows DLLs export every
+  function (`WINDOWS_EXPORT_ALL_SYMBOLS`) with no export macro, because no
+  data crosses the boundary: error categories are functions, header
+  variables are `inline constexpr`.
 - Optional: the GSS-API library (MIT krb5) for SASL GSSAPI, with
   `JHETZ_LDAP_WITH_GSSAPI` (pkg-config `krb5-gssapi`), privately linked
   by `jhetz_ldap`.

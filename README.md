@@ -121,6 +121,11 @@ networking, and `jhetz::ldap_ad` adds the Active Directory operations. These
 are CMake target names only: the C++ namespace is `jhetz::ldap` in every case
 (with `ldap::sync`, `ldap::ad` and `ldap::net`).
 
+Static and shared libraries are both supported: static by default,
+shared (DLLs on Windows) with `-DBUILD_SHARED_LIBS=ON`, a dynamic vcpkg
+triplet or Conan's `shared=True`. Capy and Corosio must have the same
+linkage, which the build and the packages see to.
+
 ## Install
 
 **vcpkg**, with this repository as a git registry: next to your `vcpkg.json`

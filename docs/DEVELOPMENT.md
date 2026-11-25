@@ -65,6 +65,47 @@ and they include the shared internal headers of `src/`.
 | `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. `/WX` on MSVC; off on clang-cl, not built yet (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 | `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
+| `BUILD_SHARED_LIBS` | `OFF` | CMake's own: shared `jhetz_ldap_core`, `jhetz_ldap` and `jhetz_ldap_ad`, and fetched Capy and Corosio (see [Shared libraries](#shared-libraries)) |
+
+### Shared libraries
+
+`-DBUILD_SHARED_LIBS=ON` builds `jhetz_ldap_core`, `jhetz_ldap` and
+`jhetz_ldap_ad` as shared libraries (`libjhetz_ldap.so.0.1.0`, SONAME
+`libjhetz_ldap.so.0.1`, since a 0.x minor version may break the ABI; DLLs
+on Windows); without it they are static. Both are tested, in CI too. Our
+libraries are always position-independent, and so are the fetched Capy and
+Corosio unless `CMAKE_POSITION_INDEPENDENT_CODE` is set. `jhetz::ldap_testing`
+and `jhetz::ldap_testing_net` stay static.
+
+All static or all shared: jhetz_ldap, Capy and Corosio must have the same
+linkage. A shared jhetz_ldap with a static Corosio inside would carry its
+own copy of Corosio's and Capy's state (the `io_context` service registry,
+the OpenSSL SNI index, thread-locals) next to the application's. A fetched
+Capy and Corosio follow `BUILD_SHARED_LIBS` (`BOOST_CAPY_DYN_LINK`,
+`BOOST_COROSIO_DYN_LINK`); installed ones must have been built the same
+way, which the vcpkg ports (the triplet's linkage) and the Conan recipe
+(`shared` propagated to `capy` and `corosio`) see to. ICU and OpenSSL may
+be either.
+
+Exports: on Linux every symbol has default visibility (the tests call
+internal functions of `src/`, so `-fvisibility=hidden` would need an export
+macro on those too). On Windows the three targets set
+`WINDOWS_EXPORT_ALL_SYMBOLS`, so a DLL exports every function, and there is
+no export macro: the export-all route needs one only for data a consumer
+uses through the DLL, and the libraries have none. The error categories are
+functions (`result_category()` and the others) returning an object defined
+in the DLL; the headers' namespace-scope and static member variables are
+`inline constexpr` values, a copy in each module being harmless; nothing
+public is `thread_local` (the one thread-local, `ad::discover`'s random
+engine, is a function-local in a `.cpp`). Keep it that way: a mutable
+global, a non-constexpr static data member or a `thread_local` in a header
+would need `__declspec(dllimport)` in consumers, and so an export macro
+(`GenerateExportHeader`). A shared Windows build puts every DLL and
+executable in `build/bin` (`CMAKE_RUNTIME_OUTPUT_DIRECTORY`, when not set),
+so the tests find our DLLs and Capy's and Corosio's; ICU's and OpenSSL's
+still come from `PATH`. With DLLs, `jhetz_ldap_alloc_tests`' replaced
+`operator new` does not see the allocations made inside `jhetz_ldap_core`
+(each DLL has its own), so it checks less there.
 
 ## Windows
 
@@ -341,7 +382,10 @@ target_link_libraries(app PRIVATE jhetz::ldap_ad)
 The components are `net` (`jhetz::ldap`, requested when none is named),
 `core` (`jhetz::ldap_core`), `ad` (`jhetz::ldap_ad`) and `gssapi` (SASL
 GSSAPI in `jhetz::ldap`). The libraries are `libjhetz_ldap_core.a`,
-`libjhetz_ldap.a` and `libjhetz_ldap_ad.a`.
+`libjhetz_ldap.a` and `libjhetz_ldap_ad.a`, or with `BUILD_SHARED_LIBS` the
+shared ones (`.so` with SONAME `.so.0.1`; `.dll` and import `.lib`), and the
+installed Capy and Corosio must have the same linkage
+([Shared libraries](#shared-libraries)).
 
 `cmake --install` installs the headers, the libraries and the `jhetz_ldap`
 package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
@@ -353,14 +397,15 @@ package is the codec only (`COMPONENTS core`; a plain
 `find_package(jhetz_ldap)` fails on it), without the networking headers; fetched
 dependencies are never installed with it. The package finds ICU
 (`find_dependency(ICU 60 COMPONENTS uc data)`), which the static libraries
-need at link time, codec-only too. Corosio at the
+need at link time (the shared ones as a dependent library), codec-only too. Corosio at the
 pinned commit needs help to install against an installed Capy;
 `tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
 Corosio, jhetz_ldap configured with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON`,
 so it fails rather than fetch when the installed packages are not found,
 then a consumer in `tests/install/consumer/` with the default component
-and `jhetz::ldap_ad`, also codec-only with the `core` component) and is the
-reference for doing it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
+and `jhetz::ldap_ad`, also codec-only with the `core` component), once
+with static and once with shared libraries (`check_install.sh WORK_DIR
+static` or `shared` for one), and is the reference for doing it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
 `_COROSIO` when set, else clones the commits pinned in `CMakeLists.txt` into
 `WORK_DIR`.
 
@@ -398,8 +443,11 @@ recipes) in the same commit, then `x-add-version`.
 ## vcpkg
 
 `packaging/vcpkg/ports/` has overlay ports for `capy` and `corosio` (the
-commits pinned in `CMakeLists.txt`) and `jhetz-ldap`, a static library with
-the features `net` (`jhetz::ldap` and `jhetz::ldap_ad`; `ad` is not a
+commits pinned in `CMakeLists.txt`) and `jhetz-ldap`. All three follow the
+triplet's library linkage (static on `x64-linux` and `x64-windows-static`,
+shared on `x64-linux-dynamic` and `x64-windows`), so they always agree, and
+declare `"supports": "!(osx | ios | uwp | android | emscripten | mingw)"`.
+`jhetz-ldap` has the features `net` (`jhetz::ldap` and `jhetz::ldap_ad`; `ad` is not a
 feature of its own, it is built with `net`), a default feature, and `gssapi`
 (needs `net`). `jhetz-ldap[core]` is the codec only
 (`jhetz::ldap_core`, `COMPONENTS core`). ICU and OpenSSL come from vcpkg.
@@ -432,7 +480,14 @@ git clone https://github.com/microsoft/vcpkg build/tools/vcpkg
 build/tools/vcpkg/bootstrap-vcpkg.sh -disableMetrics
 tests/install/check_vcpkg.sh build/vcpkg-test   # ICU and OpenSSL build first: ~6 min
 tests/install/check_vcpkg.sh build/vcpkg-test-gss x64-linux gssapi
+tests/install/check_vcpkg.sh build/vcpkg-test-dyn x64-linux-dynamic
 ```
+
+The script also runs on Windows under Git Bash with the MSVC environment
+(`windows.yml` runs it on `x64-windows` and `x64-windows-static`).
+The release tarball of 0.1.0 predates shared builds: on a dynamic triplet
+it still gives static libraries; the port's linkage applies from the next
+release.
 
 The `jhetz-ldap` port downloads the tag `v${VERSION}` (its `vcpkg.json`
 version). After a release tag is pushed, set `"version"` in
@@ -486,8 +541,11 @@ Corosio come from Conan; its options are `net` (default `True`:
 `jhetz::ldap` and `jhetz::ldap_ad`; `False` is `jhetz::ldap_core` alone) and
 `gssapi` (default `False`; the system GSS-API through pkg-config, as in the
 vcpkg port; on Windows SSPI's `secur32`, without system requirements or
-pkg-config), plus `fPIC` (`shared=True` is refused: the libraries are
-static). ICU and OpenSSL come from ConanCenter; ICU's data is built into
+pkg-config), plus `shared` and `fPIC`. `shared` is propagated to `capy`
+and `corosio` (both have `shared` and `fPIC`, and define
+`BOOST_*_DYN_LINK` when shared), and a mismatch is refused; as for vcpkg,
+the 0.1.0 tarball builds static libraries whatever `shared` says, so
+shared applies from the next release. ICU and OpenSSL come from ConanCenter; ICU's data is built into
 `libicudata` (`icu/*:data_packaging=library`). The package is
 `find_package(jhetz_ldap)` with the targets `jhetz::ldap`,
 `jhetz::ldap_core` and `jhetz::ldap_ad`.
@@ -504,6 +562,7 @@ conan create packaging/conan/recipes/corosio/all --version cci.20261120 --build=
 conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 --build=missing   # ICU, OpenSSL: ~15 min
 conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o 'jhetz-ldap/*:net=False'
 conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o 'jhetz-ldap/*:gssapi=True'
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o '*:shared=True' --build=missing
 ```
 
 A consumer adds a clone as a remote

@@ -7,6 +7,12 @@ package matches only the same minor version (`find_package(jhetz_ldap 0.1)`,
 
 ## Unreleased
 
+- Shared libraries: `BUILD_SHARED_LIBS=ON` builds `jhetz_ldap_core`,
+  `jhetz_ldap` and `jhetz_ldap_ad` shared (SONAME `.so.0.1`; DLLs on
+  Windows, every function exported), and fetched Capy and Corosio with
+  them; all three always have the same linkage. The vcpkg ports follow the
+  triplet's linkage and support Linux and Windows (not MinGW); the Conan
+  recipe accepts `shared=True` and passes it to `capy` and `corosio`.
 - SASL GSSAPI on Windows through SSPI's Kerberos package (`secur32`):
   the same `ldap::sasl_gssapi`, the logged-on user's credentials by
   default, the RFC 4752 security layers and tls-server-end-point channel
