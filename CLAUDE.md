@@ -86,7 +86,7 @@ Fuzzers (`build/fuzz`, Clang, `-DJHETZ_LDAP_BUILD_FUZZERS=ON`) and coverage are 
 coro-ldap is a C++23 LDAP client library with three CMake targets (the C++ namespace is `jhetz::ldap` for all of them):
 
 - **`jhetz::ldap_core`**: the codec, whose only dependency is ICU (UTF-8 decoding, character properties): BER, LDAP messages and controls, DN, filter, URL, schema, matching rules (RFC 4517 with LDAPprep, RFC 4518), and the entry-to-struct mapping.
-- **`jhetz::ldap`**: the client: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256, optional GSSAPI), using ICU for SASLprep.
+- **`jhetz::ldap`**: the client: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256(-PLUS), NTLM and optional GSSAPI: the system GSS-API on Linux, SSPI on Windows), using ICU for SASLprep.
 - **`jhetz::ldap_ad`**: the Active Directory helpers over the client's public API (`include/jhetz/ldap/ad/`, `src/ad/`).
 - **`ldap::sync::connection`** (`sync.hpp`, in `jhetz::ldap`): a blocking facade over the async connection.
 
@@ -96,7 +96,7 @@ Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport),
 
 The `bd prime` memories have the details. In short:
 
-- Don't add new macros. Use functions, templates and constexpr instead (Catch2's macros are fine).
+- Macros only where nothing else works (e.g. a DLL export macro), kept to the minimum; prefer functions, templates and constexpr (Catch2's macros are fine).
 - Text handling is full UTF-8 everywhere. Never ship an ASCII-only restriction; implement the RFC preparation instead.
 - ICU is the Unicode dependency.
 - Don't use `std::optional<T&>`; lookups return pointers (null means not found).
