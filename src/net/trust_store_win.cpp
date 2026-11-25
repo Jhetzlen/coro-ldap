@@ -1,6 +1,5 @@
-// Default verification on Windows: the CryptoAPI "ROOT" store's roots
-// allowed for serverAuth and not distrusted, as OpenSSL's anchors, and
-// verify_system_chain. Needs CERT_CHAIN_PARA_HAS_EXTRA_FIELDS (CMake).
+// Default verification on Windows: CryptoAPI verifies the chain
+// (verify_system_chain). Needs CERT_CHAIN_PARA_HAS_EXTRA_FIELDS (CMake).
 #include "trust_store.hpp"
 
 #include "../format_util.hpp"
@@ -12,8 +11,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -31,190 +28,6 @@ namespace {
 		void operator()(void *store) const noexcept { CertCloseStore(static_cast<HCERTSTORE>(store), 0); }
 	};
 	using store_ptr = std::unique_ptr<void, store_closer>;
-
-	constexpr DWORD sha1_size = 20;
-
-	auto last_error() -> std::error_code { return { static_cast<int>(GetLastError()), std::system_category() }; }
-
-	auto is_not_found(DWORD error) -> bool { return error == static_cast<DWORD>(CRYPT_E_NOT_FOUND); }
-
-	// Room for a decoded structure of `size` bytes: max_align_t elements, as
-	// it holds a CERT_ENHKEY_USAGE and the pointers and strings it points to.
-	auto aligned_buffer(DWORD size) -> std::vector<std::max_align_t>
-	{
-		return std::vector<std::max_align_t>((size + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
-	}
-
-	auto lists_server_auth(const CERT_ENHKEY_USAGE &usage) -> bool
-	{
-		for (DWORD i = 0; i < usage.cUsageIdentifier; ++i) {
-			const char *oid = usage.rgpszUsageIdentifier[i];
-			if (oid != nullptr && std::string_view(oid) == szOID_PKIX_KP_SERVER_AUTH) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	// The certificate's extended key usage property allows serverAuth.
-	auto server_auth_allowed(PCCERT_CONTEXT cert) -> bool
-	{
-		DWORD size = 0;
-		if (CertGetEnhancedKeyUsage(cert, CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG, nullptr, &size) == FALSE) {
-			return is_not_found(GetLastError());
-		}
-		if (size < sizeof(CERT_ENHKEY_USAGE)) {
-			return false;
-		}
-		std::vector<std::max_align_t> buffer = aligned_buffer(size);
-		auto *usage = reinterpret_cast<PCERT_ENHKEY_USAGE>(buffer.data());
-		SetLastError(0);
-		if (CertGetEnhancedKeyUsage(cert, CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG, usage, &size) == FALSE) {
-			return is_not_found(GetLastError());
-		}
-		if (usage->cUsageIdentifier == 0) {
-			return is_not_found(GetLastError());
-		}
-		return lists_server_auth(*usage);
-	}
-
-	// wincrypt.h's CERT_NOT_BEFORE_FILETIME_PROP_ID and
-	// CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID, which older SDKs lack.
-	constexpr DWORD not_before_filetime_prop_id = 126;
-	constexpr DWORD not_before_enhkey_usage_prop_id = 127;
-
-	enum class usage_property : std::uint8_t {
-		absent,
-		lists_server_auth,
-		omits_server_auth,
-		unreadable,// there, but cannot be read or decoded
-	};
-
-	auto read_usage_property(PCCERT_CONTEXT cert, DWORD id) -> usage_property
-	{
-		DWORD size = 0;
-		if (CertGetCertificateContextProperty(cert, id, nullptr, &size) == FALSE) {
-			return is_not_found(GetLastError()) ? usage_property::absent : usage_property::unreadable;
-		}
-		std::vector<BYTE> encoded(size);
-		if (CertGetCertificateContextProperty(cert, id, encoded.data(), &size) == FALSE) {
-			return usage_property::unreadable;
-		}
-		DWORD decoded_size = 0;
-		if (CryptDecodeObjectEx(
-			  X509_ASN_ENCODING, X509_ENHANCED_KEY_USAGE, encoded.data(), size, 0, nullptr, nullptr, &decoded_size)
-			  == FALSE
-			|| decoded_size < sizeof(CERT_ENHKEY_USAGE)) {
-			return usage_property::unreadable;
-		}
-		std::vector<std::max_align_t> buffer = aligned_buffer(decoded_size);
-		auto *usage = reinterpret_cast<PCERT_ENHKEY_USAGE>(buffer.data());
-		if (CryptDecodeObjectEx(
-			  X509_ASN_ENCODING, X509_ENHANCED_KEY_USAGE, encoded.data(), size, 0, nullptr, usage, &decoded_size)
-			== FALSE) {
-			return usage_property::unreadable;
-		}
-		return lists_server_auth(*usage) ? usage_property::lists_server_auth : usage_property::omits_server_auth;
-	}
-
-	// The CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID property lists serverAuth, or
-	// cannot be read.
-	auto server_auth_disallowed(PCCERT_CONTEXT cert) -> bool
-	{
-		const usage_property p = read_usage_property(cert, CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID);
-		return p == usage_property::lists_server_auth || p == usage_property::unreadable;
-	}
-
-	// A NotBefore date applies to serverAuth.
-	auto server_auth_not_before(PCCERT_CONTEXT cert) -> bool
-	{
-		DWORD size = 0;
-		if (CertGetCertificateContextProperty(cert, not_before_filetime_prop_id, nullptr, &size) == FALSE
-			&& is_not_found(GetLastError())) {
-			return false;
-		}
-		return read_usage_property(cert, not_before_enhkey_usage_prop_id) != usage_property::omits_server_auth;
-	}
-
-	// Marked disallowed (the property's FILETIME is when; any value
-	// distrusts it here).
-	auto has_disallowed_filetime(PCCERT_CONTEXT cert) -> bool
-	{
-		DWORD size = 0;
-		return CertGetCertificateContextProperty(cert, CERT_DISALLOWED_FILETIME_PROP_ID, nullptr, &size) != FALSE;
-	}
-
-	// `cert` is in `store`, by SHA-1 thumbprint. True too when the
-	// thumbprint cannot be read (fail closed: the root is skipped).
-	auto in_store(HCERTSTORE store, PCCERT_CONTEXT cert) -> bool
-	{
-		std::array<BYTE, sha1_size> hash{};
-		DWORD size = sha1_size;
-		if (CertGetCertificateContextProperty(cert, CERT_SHA1_HASH_PROP_ID, hash.data(), &size) == FALSE
-			|| size != sha1_size) {
-			return true;
-		}
-		CRYPT_HASH_BLOB blob{ .cbData = size, .pbData = hash.data() };
-		PCCERT_CONTEXT found = CertFindCertificateInStore(
-		  store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_SHA1_HASH, &blob, nullptr);
-		if (found == nullptr) {
-			return false;
-		}
-		CertFreeCertificateContext(found);
-		return true;
-	}
-
-	auto describe(PCCERT_CONTEXT cert, HCERTSTORE disallowed) -> system_certificate
-	{
-		const BYTE *der = cert->pbCertEncoded;
-		return {
-			.der = std::vector<unsigned char>(der, der + cert->cbCertEncoded),
-			.server_auth = server_auth_allowed(cert) && !server_auth_disallowed(cert) && !server_auth_not_before(cert),
-			.distrusted = has_disallowed_filetime(cert) || in_store(disallowed, cert),
-		};
-	}
-
-}// namespace
-
-auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>
-{
-	const std::string what = "tls: system trust store";
-	const store_ptr root(CertOpenSystemStoreW(0, L"ROOT"));
-	if (!root) {
-		const auto ec = last_error();
-		return fail(ec, what + ": cannot open the ROOT store");
-	}
-	// Without it a distrusted root could slip in: fail closed.
-	const store_ptr disallowed(CertOpenSystemStoreW(0, L"Disallowed"));
-	if (!disallowed) {
-		const auto ec = last_error();
-		return fail(ec, what + ": cannot open the Disallowed store");
-	}
-
-	std::vector<system_certificate> certs;
-	// CertEnumCertificatesInStore frees the previous context.
-	PCCERT_CONTEXT cert = nullptr;
-	try {
-		while ((cert = CertEnumCertificatesInStore(root.get(), cert)) != nullptr) {
-			if ((cert->dwCertEncodingType & X509_ASN_ENCODING) == 0 || cert->pbCertEncoded == nullptr) {
-				continue;
-			}
-			certs.push_back(describe(cert, disallowed.get()));
-		}
-	} catch (...) {
-		if (cert != nullptr) {
-			CertFreeCertificateContext(cert);
-		}
-		throw;
-	}
-	// Null ends the loop: the end of the store, or a failure.
-	if (const DWORD error = GetLastError(); !is_not_found(error) && error != static_cast<DWORD>(ERROR_NO_MORE_FILES)) {
-		return fail({ static_cast<int>(error), std::system_category() }, what + ": cannot enumerate the ROOT store");
-	}
-	return add_trust_anchors(ctx, trust_anchors_pem(certs), what);
-}
-
-namespace {
 
 	struct certificate_freer
 	{
@@ -285,6 +98,10 @@ namespace {
 	}
 
 }// namespace
+
+// CryptoAPI decides on the chain (verify_system_chain): OpenSSL gets no
+// anchors.
+auto load_system_trust(boost::corosio::tls_context & /*ctx*/) -> result<void> { return {}; }
 
 auto platform_verifies_chain() noexcept -> bool { return true; }
 

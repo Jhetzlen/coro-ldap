@@ -203,13 +203,9 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   (every other operation on that io_context waits). A rejection's
   context ends in `Windows certificate chain: <reason> (0x<HRESULT>)`.
   DESIGN.md has the reasoning.
-- The `ROOT` store is still copied into OpenSSL per connection (a root is
-  skipped when its extended key usage property excludes serverAuth, its
-  disallowed usage property lists serverAuth, it has a
-  `CERT_DISALLOWED_FILETIME_PROP_ID` or a `CERT_NOT_BEFORE_FILETIME_PROP_ID`
-  applying to serverAuth, or it is also in the `Disallowed` store), and a
-  store that cannot be enumerated to the end fails the connect; with
-  CryptoAPI deciding on the chain, that copy no longer decides anything.
+- OpenSSL gets no trust anchors from Windows (the `ROOT` store is not
+  copied into it): its chain errors are let through for CryptoAPI's
+  verdict.
 - ldapi:// uses Windows' AF_UNIX, which needs Windows 10 1803 or later.
   Abstract socket names (a leading NUL, `ldapi://%00name`) are Linux only:
   elsewhere the URL is rejected as `invalid_url`. Winsock reads `sun_path`

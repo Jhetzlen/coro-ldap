@@ -1,6 +1,5 @@
-// The trust anchors of default verification: OpenSSL's own off Windows,
-// the CryptoAPI "ROOT" store on Windows, where CryptoAPI also verifies the
-// chain.
+// Default verification: OpenSSL's own trust anchors off Windows; on
+// Windows CryptoAPI verifies the chain and OpenSSL gets no anchors.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -15,28 +14,8 @@
 
 namespace jhetz::ldap::net::detail {
 
-// One certificate of a system store, with what the store says about it.
-struct system_certificate
-{
-	std::vector<unsigned char> der{};
-	// Allowed for TLS server authentication by the store's properties, with no
-	// NotBefore date.
-	bool server_auth = true;
-	// Distrusted: marked disallowed (CERT_DISALLOWED_FILETIME_PROP_ID) or
-	// also in the "Disallowed" store.
-	bool distrusted = false;
-};
-
-// The anchors from `certs` allowed for server authentication, not
-// distrusted and parsing as one X.509 certificate, as PEM.
-auto trust_anchors_pem(std::span<const system_certificate> certs) -> std::vector<std::string>;
-
-// Adds `anchors` to `ctx`; no_such_file_or_directory when there is none.
-auto add_trust_anchors(boost::corosio::tls_context &ctx, std::span<const std::string> anchors, const std::string &what)
-  -> result<void>;
-
 // The platform's default trust anchors into `ctx`
-// (trust_store_default.cpp, or trust_store_win.cpp on Windows).
+// (trust_store_default.cpp; none in trust_store_win.cpp).
 auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>;
 
 // True on Windows: verify_system_chain decides on the chain.

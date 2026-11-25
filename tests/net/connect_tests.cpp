@@ -1539,50 +1539,6 @@ TEST_CASE("TLS configuration errors leave the OpenSSL error queue empty", "[net]
 	CHECK(ERR_peek_error() == 0);
 }
 
-TEST_CASE("system trust store: anchors from a store listing", "[net][connect][tls]")
-{
-	// The portable half of the Windows ROOT store loading (trust_store.hpp):
-	// filtering, DER parsing and the PEM handed to Corosio.
-	const auto to_uchar = [](const std::vector<std::byte> &v) {
-		std::vector<unsigned char> out;
-		out.reserve(v.size());
-		for (const auto b : v) {
-			out.push_back(static_cast<unsigned char>(b));
-		}
-		return out;
-	};
-	const auto ca_der = to_uchar(certificate_der(pki().ca_pem()));
-	const auto other_der = to_uchar(certificate_der(pki().issue("other", "DNS:other.example").cert_pem));
-	REQUIRE(ca_der.size() > 1);
-	auto trailing = ca_der;
-	trailing.push_back(0);
-	const std::vector<unsigned char> truncated(ca_der.begin(), std::prev(ca_der.end()));
-
-	const std::vector<net::detail::system_certificate> listing{
-		{ .der = ca_der },
-		{ .der = other_der, .server_auth = false },
-		{ .der = other_der, .distrusted = true },
-		{ .der = { 0x30, 0x03, 0x02, 0x01, 0x01 } },
-		{ .der = trailing },
-		{ .der = truncated },
-		{ .der = {} },
-	};
-	const auto anchors = net::detail::trust_anchors_pem(listing);
-	REQUIRE(anchors.size() == 1);
-	CHECK_THAT(anchors[0], StartsWith("-----BEGIN CERTIFICATE-----\n"));
-	CHECK(to_uchar(certificate_der(anchors[0])) == ca_der);
-	CHECK(ERR_peek_error() == 0);
-
-	corosio::tls_context ctx;
-	CHECK(net::detail::add_trust_anchors(ctx, anchors, "tls: system trust store").has_value());
-	auto none = net::detail::add_trust_anchors(ctx, {}, "tls: system trust store");
-	REQUIRE_FALSE(none.has_value());
-	CHECK(none.error().code == std::errc::no_such_file_or_directory);
-	CHECK(std::string(none.error().context) == "tls: system trust store: no usable trust anchor");
-	// Off Windows: OpenSSL's default paths.
-	CHECK(net::detail::load_system_trust(ctx).has_value());
-}
-
 TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 {
 	// A c_rehash-style directory: the CA under "<subject hash>.0". Only the
