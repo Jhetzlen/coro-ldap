@@ -127,13 +127,15 @@ namespace detail {
 		std::thread::id id_;
 	};
 
-	// The tasks behind sync::transaction::begin and the facades' search_stream.
-	[[nodiscard]] auto make_transaction(ldap::connection &c, extended_controls controls)
-	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
-	[[nodiscard]] auto make_stream(ldap::connection &c, search_params request, std::pmr::memory_resource *mr)
-	  -> boost::capy::task<result<std::unique_ptr<ldap::search_stream>>>;
-	[[nodiscard]] auto make_stream(ldap::client &c, search_params request, std::pmr::memory_resource *mr)
-	  -> boost::capy::task<result<std::unique_ptr<ldap::search_stream>>>;
+	// The value of `t` on the heap.
+	template<class T> auto boxed(boost::capy::task<result<T>> t) -> boost::capy::task<result<std::unique_ptr<T>>>
+	{
+		auto r = co_await std::move(t);
+		if (!r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return std::make_unique<T>(std::move(*r));
+	}
 
 	// A task returning f()'s value, or success after f() for a void f.
 	template<class F> auto invoked(F f) -> boost::capy::task<result<std::invoke_result_t<F &>>>
@@ -345,7 +347,7 @@ namespace detail {
 		[[nodiscard]] auto search_stream(search_params request,
 		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sync::search_stream>
 		{
-			auto s = self().call([&](ldap::connection &c) { return make_stream(c, std::move(request), mr); });
+			auto s = self().call([&](ldap::connection &c) { return boxed(c.search_stream(std::move(request), mr)); });
 			if (!s) {
 				return std::unexpected(std::move(s.error()));
 			}
@@ -579,6 +581,8 @@ class client
 	[[nodiscard]] auto io() const noexcept -> const detail::io_thread &;
 	// Touched only on the I/O thread.
 	[[nodiscard]] auto pool() const noexcept -> ldap::client &;
+	// A Lease over a Pooled lease taken from pool().
+	template<class Lease, class Pooled> auto acquire_as() -> result<Lease>;
 
 	std::shared_ptr<detail::client_core> core_;
 };
@@ -597,7 +601,7 @@ namespace detail {
 template<class D> auto transaction::begin_on(D &d, extended_controls controls) -> result<transaction>
 {
 	auto t = detail::facade_access::call(
-	  d, [&](ldap::connection &c) { return detail::make_transaction(c, std::move(controls)); });
+	  d, [&](ldap::connection &c) { return detail::boxed(ldap::transaction::begin(c, std::move(controls))); });
 	if (!t) {
 		return std::unexpected(std::move(t.error()));
 	}

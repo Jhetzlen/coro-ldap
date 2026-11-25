@@ -61,37 +61,6 @@ namespace detail {
 		thread_.join();
 	}
 
-	// The ldap::transaction is made, and later destroyed, on the I/O thread.
-	auto make_transaction(ldap::connection &c, extended_controls controls)
-	  -> capy::task<result<std::unique_ptr<ldap::transaction>>>
-	{
-		auto r = co_await ldap::transaction::begin(c, std::move(controls));
-		if (!r) {
-			co_return std::unexpected(std::move(r.error()));
-		}
-		co_return std::make_unique<ldap::transaction>(std::move(*r));
-	}
-
-	auto make_stream(ldap::connection &c, search_params request, std::pmr::memory_resource *mr)
-	  -> capy::task<result<std::unique_ptr<ldap::search_stream>>>
-	{
-		auto r = co_await c.search_stream(std::move(request), mr);
-		if (!r) {
-			co_return std::unexpected(std::move(r.error()));
-		}
-		co_return std::make_unique<ldap::search_stream>(std::move(*r));
-	}
-
-	auto make_stream(ldap::client &c, search_params request, std::pmr::memory_resource *mr)
-	  -> capy::task<result<std::unique_ptr<ldap::search_stream>>>
-	{
-		auto r = co_await c.search_stream(std::move(request), mr);
-		if (!r) {
-			co_return std::unexpected(std::move(r.error()));
-		}
-		co_return std::make_unique<ldap::search_stream>(std::move(*r));
-	}
-
 }// namespace detail
 
 // ---------------------------------------------------------------- search_stream
@@ -148,6 +117,15 @@ void search_stream::settle() noexcept
 
 namespace {
 
+	// fn(*p) on the I/O thread `io`, or `fallback` when p is null or fn fails.
+	template<class T, class R, class F> auto query(const detail::io_thread *io, const T *p, R fallback, F fn) -> R
+	{
+		if (p == nullptr) {
+			return fallback;
+		}
+		return io->run([p, fn] { return detail::invoked([p, fn] { return fn(*p); }); }).value_or(std::move(fallback));
+	}
+
 	auto no_stream() -> error
 	{
 		return make_error(client_errc::not_connected, "search: no search stream (moved from)");
@@ -173,41 +151,28 @@ auto search_stream::next_item() -> result<std::optional<ldap::search_stream::ite
 
 auto search_stream::done() const -> bool
 {
-	if (!stream_) {
-		return true;
-	}
-	const ldap::search_stream *s = stream_.get();
-	return io_->run([s] { return detail::invoked([s] { return s->done(); }); }).value_or(true);
+	return query(io_.get(), stream_.get(), true, [](const ldap::search_stream &s) { return s.done(); });
 }
 
 auto search_stream::references() const -> string_list
 {
-	if (!stream_) {
-		return {};
-	}
-	const ldap::search_stream *s = stream_.get();
-	return io_->run([s] { return detail::invoked([s] { return string_list(s->references()); }); })
-	  .value_or(string_list{});
+	return query(io_.get(), stream_.get(), string_list{}, [](const ldap::search_stream &s) {
+		return string_list(s.references());
+	});
 }
 
 auto search_stream::reference_urls(std::pmr::memory_resource *mr) const -> std::pmr::vector<url>
 {
-	if (!stream_) {
-		return std::pmr::vector<url>(mr);
-	}
-	const ldap::search_stream *s = stream_.get();
-	return io_->run([s, mr] { return detail::invoked([s, mr] { return s->reference_urls(mr); }); })
-	  .value_or(std::pmr::vector<url>(mr));
+	return query(io_.get(), stream_.get(), std::pmr::vector<url>(mr), [mr](const ldap::search_stream &s) {
+		return s.reference_urls(mr);
+	});
 }
 
 auto search_stream::controls() const -> std::pmr::vector<control>
 {
-	if (!stream_) {
-		return {};
-	}
-	const ldap::search_stream *s = stream_.get();
-	return io_->run([s] { return detail::invoked([s] { return std::pmr::vector<control>(s->controls()); }); })
-	  .value_or(std::pmr::vector<control>{});
+	return query(io_.get(), stream_.get(), std::pmr::vector<control>{}, [](const ldap::search_stream &s) {
+		return std::pmr::vector<control>(s.controls());
+	});
 }
 
 // ---------------------------------------------------------------- connection
@@ -335,21 +300,13 @@ void transaction::settle() noexcept
 
 auto transaction::identifier() const -> std::string
 {
-	if (!txn_) {
-		return {};
-	}
-	const ldap::transaction *t = txn_.get();
-	return io_->run([t] { return detail::invoked([t] { return std::string(t->identifier()); }); })
-	  .value_or(std::string{});
+	return query(
+	  io_.get(), txn_.get(), std::string{}, [](const ldap::transaction &t) { return std::string(t.identifier()); });
 }
 
 auto transaction::is_open() const -> bool
 {
-	if (!txn_) {
-		return false;
-	}
-	const ldap::transaction *t = txn_.get();
-	return io_->run([t] { return detail::invoked([t] { return t->is_open(); }); }).value_or(false);
+	return query(io_.get(), txn_.get(), false, [](const ldap::transaction &t) { return t.is_open(); });
 }
 
 auto transaction::add(add_params request) -> result<response>
@@ -534,25 +491,22 @@ auto client::pool() const noexcept -> ldap::client &
 	return *core_->pool;// NOLINT(bugprone-unchecked-optional-access): engaged until the core is destroyed
 }
 
-auto client::acquire() -> result<lease>
+template<class Lease, class Pooled> auto client::acquire_as() -> result<Lease>
 {
-	auto r = core_->io.run([&] { return detail::take_lease<ldap::lease>(*core_->pool); });
+	auto r = core_->io.run([&] { return detail::take_lease<Pooled>(*core_->pool); });
 	if (!r) {
 		return std::unexpected(std::move(r.error()));
 	}
 	// The lease shares the ownership of the core, pointing at its I/O thread.
-	return lease(
+	return Lease(
 	  std::shared_ptr<const detail::io_thread>(core_, &core_->io), std::move(r->first), std::move(r->second));
 }
 
+auto client::acquire() -> result<lease> { return acquire_as<lease, ldap::lease>(); }
+
 auto client::acquire_exclusive() -> result<exclusive_lease>
 {
-	auto r = core_->io.run([&] { return detail::take_lease<ldap::exclusive_lease>(*core_->pool); });
-	if (!r) {
-		return std::unexpected(std::move(r.error()));
-	}
-	return exclusive_lease(
-	  std::shared_ptr<const detail::io_thread>(core_, &core_->io), std::move(r->first), std::move(r->second));
+	return acquire_as<exclusive_lease, ldap::exclusive_lease>();
 }
 auto client::search(search_params request, std::pmr::memory_resource *mr) -> result<search_result>
 {
@@ -561,7 +515,7 @@ auto client::search(search_params request, std::pmr::memory_resource *mr) -> res
 
 auto client::search_stream(search_params request, std::pmr::memory_resource *mr) -> result<sync::search_stream>
 {
-	auto s = core_->io.run([&] { return detail::make_stream(*core_->pool, std::move(request), mr); });
+	auto s = core_->io.run([&] { return detail::boxed(core_->pool->search_stream(std::move(request), mr)); });
 	if (!s) {
 		return std::unexpected(std::move(s.error()));
 	}
