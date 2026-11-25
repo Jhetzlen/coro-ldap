@@ -106,9 +106,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Restored and saved in separate steps, so a red build or test still
-      # saves them. The key names the manifest and triplet and the MSVC
-      # tools (part of each package's ABI hash); when one of them changed,
-      # an older cache is restored and the new packages are added to it.
+      # saves them. The key names the leg, the manifest and ports and the
+      # MSVC tools (part of each package's ABI hash); when one of them
+      # changed, an older cache is restored and the new packages are added
+      # to it (the last prefix: the caches from before the matrix).
       - name: Restore vcpkg's binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v4
@@ -118,6 +119,7 @@ jobs:
           restore-keys: |
             vcpkg-${{ runner.os }}-${{ matrix.linkage }}-${{ hashFiles('.github/vcpkg/**', 'packaging/vcpkg/**') }}-
             vcpkg-${{ runner.os }}-${{ matrix.linkage }}-
+            vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-
 
       - name: Restore the FetchContent sources
         id: deps-cache
