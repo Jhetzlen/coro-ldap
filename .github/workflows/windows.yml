@@ -1,7 +1,8 @@
 name: windows
 
-# Windows build and unit tests (MSVC, vcpkg's ICU and OpenSSL). Separate
-# from ci.yml, which holds the Linux jobs.
+# Windows build and unit tests (MSVC, vcpkg's ICU and OpenSSL), static and
+# shared (DLLs), and jhetz-ldap installed through the overlay ports on the
+# matching triplet. Separate from ci.yml, which holds the Linux jobs.
 on:
   push:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - "examples/**"
       - ".github/workflows/windows.yml"
       - ".github/vcpkg/**"
+      - "packaging/vcpkg/**"
       - ".github/badges.py"
       - ".github/publish_badges.sh"
   pull_request:
@@ -26,6 +28,7 @@ on:
       - "examples/**"
       - ".github/workflows/windows.yml"
       - ".github/vcpkg/**"
+      - "packaging/vcpkg/**"
       - ".github/badges.py"
       - ".github/publish_badges.sh"
   workflow_dispatch:
@@ -56,9 +59,19 @@ env:
 
 jobs:
   msvc:
-    name: MSVC Debug
+    name: MSVC Debug (${{ matrix.linkage }})
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - linkage: static
+            shared: "OFF"
+            port-triplet: x64-windows-static
+          - linkage: shared
+            shared: "ON"
+            port-triplet: x64-windows
     steps:
       - uses: actions/checkout@v5
 
@@ -101,10 +114,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: vcpkg-bincache
-          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/vcpkg/**') }}-${{ env.VCToolsVersion }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.linkage }}-${{ hashFiles('.github/vcpkg/**', 'packaging/vcpkg/**') }}-${{ env.VCToolsVersion }}
           restore-keys: |
-            vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/vcpkg/**') }}-
-            vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-
+            vcpkg-${{ runner.os }}-${{ matrix.linkage }}-${{ hashFiles('.github/vcpkg/**', 'packaging/vcpkg/**') }}-
+            vcpkg-${{ runner.os }}-${{ matrix.linkage }}-
 
       - name: Restore the FetchContent sources
         id: deps-cache
@@ -123,14 +136,6 @@ jobs:
             --overlay-triplets="$env:VCPKG_MANIFEST\triplets" --triplet $env:VCPKG_TRIPLET `
             --x-install-root="$env:VCPKG_INSTALLED"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      # Also when the install failed part way: what it built is kept.
-      - name: Save vcpkg's binary cache
-        if: ${{ !cancelled() && (steps.install.outcome == 'success' || steps.install.outcome == 'failure') && steps.vcpkg-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: vcpkg-bincache
-          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/vcpkg/**') }}-${{ env.VCToolsVersion }}
 
       # Debug without the checked iterators (_ITERATOR_DEBUG_LEVEL=2 makes
       # every container allocate a proxy from its allocator, which the
@@ -151,6 +156,7 @@ jobs:
           -DJHETZ_LDAP_BUILD_TESTS=ON
           -DJHETZ_LDAP_BUILD_FUZZERS=OFF
           -DJHETZ_LDAP_WITH_GSSAPI=ON
+          -DBUILD_SHARED_LIBS=${{ matrix.shared }}
 
       - name: Save the FetchContent sources
         if: ${{ steps.deps-cache.outputs.cache-hit != 'true' }}
@@ -168,6 +174,7 @@ jobs:
       # No slapd, Samba or KDC on Windows: the integration tests are left out.
       # The ICU and OpenSSL DLLs from PATH: vcpkg's toolchain copies a Debug
       # build's from debug\bin, which the release-only triplet does not have.
+      # A shared build has its own DLLs next to the executables, in build\bin.
       # A failing test still gets its badge; the last step fails the job.
       - name: Test
         id: test
@@ -178,14 +185,33 @@ jobs:
           exit 0
 
       - name: Badge file
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.linkage == 'static' }}
         run: python .github/badges.py tests "windows tests" ctest.log badges/tests-windows.json >> $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v5
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.linkage == 'static' }}
         with:
           name: badges-windows
           path: badges/
+
+      # tests/install/check_vcpkg.sh: ICU, OpenSSL, Capy, Corosio and
+      # jhetz-ldap (this tree) through packaging/vcpkg/ports on the static or
+      # the dynamic triplet, then a consumer built against them.
+      - name: Install through the vcpkg ports (${{ matrix.port-triplet }})
+        id: ports
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: bash
+        run: |
+          export JHETZ_LDAP_VCPKG="$(cygpath -m "$VCPKG_ROOT")"
+          tests/install/check_vcpkg.sh "$(cygpath -m "$RUNNER_TEMP")/ports" ${{ matrix.port-triplet }}
+
+      # Also when an install failed part way: what it built is kept.
+      - name: Save vcpkg's binary cache
+        if: ${{ !cancelled() && steps.vcpkg-cache.outputs.cache-hit != 'true' && (steps.install.outcome == 'success' || steps.install.outcome == 'failure') }}
+        uses: actions/cache/save@v4
+        with:
+          path: vcpkg-bincache
+          key: vcpkg-${{ runner.os }}-${{ matrix.linkage }}-${{ hashFiles('.github/vcpkg/**', 'packaging/vcpkg/**') }}-${{ env.VCToolsVersion }}
 
       - name: Fail on test failures
         if: ${{ steps.test.outputs.status != '0' }}

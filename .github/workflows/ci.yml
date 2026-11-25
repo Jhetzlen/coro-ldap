@@ -73,10 +73,19 @@ jobs:
       - name: Check formatting
         run: find include src tests examples -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
 
+  # Static and shared libraries (BUILD_SHARED_LIBS).
   gcc-sanitize:
-    name: GCC 16 Debug (ASan + UBSan)
+    name: GCC 16 Debug (ASan + UBSan, ${{ matrix.linkage }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - linkage: static
+            shared: "OFF"
+          - linkage: shared
+            shared: "ON"
     container:
       image: debian:sid
       options: --sysctl net.ipv6.conf.all.disable_ipv6=0
@@ -89,8 +98,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .ccache
-          key: ccache-gcc-sanitize-${{ github.sha }}
-          restore-keys: ccache-gcc-sanitize-
+          key: ccache-gcc-sanitize-${{ matrix.linkage }}-${{ github.sha }}
+          restore-keys: ccache-gcc-sanitize-${{ matrix.linkage }}-
       - name: Configure
         run: >
           cmake -B build -G Ninja
@@ -99,6 +108,7 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DJHETZ_LDAP_SANITIZE=ON
           -DJHETZ_LDAP_WERROR=ON
+          -DBUILD_SHARED_LIBS=${{ matrix.shared }}
       - name: Build
         run: cmake --build build
       # Includes the net.* tests: in-process TCP, TLS and Unix socket servers.
@@ -206,8 +216,9 @@ jobs:
       - run: ccache -s
 
   # tests/install/check_install.sh: installs Capy, Corosio and jhetz_ldap
-  # (full and codec-only) and builds a consumer against each: the install
-  # rules, jhetz_ldap-config.cmake and its find_dependency calls.
+  # (full and codec-only, static and shared) and builds a consumer against
+  # each: the install rules, jhetz_ldap-config.cmake and its find_dependency
+  # calls.
   install:
     name: Install and consume the CMake package (GCC 16)
     runs-on: ubuntu-24.04
