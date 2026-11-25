@@ -66,6 +66,7 @@ Build dir `build/main`, configured from the repo root (Ninja, Debug, GCC):
 cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
 cmake --build build/main -j
 ctest --test-dir build/main -j12        # serial ctest is ~4x slower (fuzz replays); let the build finish first
+# Test binaries in build/main/tests: jhetz_ldap_tests (codec), jhetz_ldap_client_tests (in-process network, `net.` prefix)
 
 # Integration tests against a throwaway OpenLDAP slapd in Docker (Debian's 2.6.10; skipped without docker;
 # run_slapd.sh alone uses a local slapd). With GSSAPI: run_kdc.sh run_openldap.sh ... --test-dir build/gssapi
@@ -82,13 +83,14 @@ Fuzzers (`build/fuzz`, Clang, `-DJHETZ_LDAP_BUILD_FUZZERS=ON`) and coverage are 
 
 ## Architecture Overview
 
-coro-ldap is a C++23 LDAP client library with two CMake targets:
+coro-ldap is a C++23 LDAP client library with three CMake targets (the C++ namespace is `jhetz::ldap` for all of them):
 
 - **`jhetz::ldap_core`**: the codec, whose only dependency is ICU (UTF-8 decoding, character properties): BER, LDAP messages and controls, DN, filter, URL, schema, matching rules (RFC 4517 with LDAPprep, RFC 4518), and the entry-to-struct mapping.
-- **`jhetz::ldap`**: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256), using ICU for SASLprep.
-- **`ldap::sync::connection`** (`sync.hpp`): a blocking facade over the async connection.
+- **`jhetz::ldap`**: the client: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256, optional GSSAPI), using ICU for SASLprep.
+- **`jhetz::ldap_ad`**: the Active Directory helpers over the client's public API (`include/jhetz/ldap/ad/`, `src/ad/`).
+- **`ldap::sync::connection`** (`sync.hpp`, in `jhetz::ldap`): a blocking facade over the async connection.
 
-Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/connection/` for the connection modules, `src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), and `fuzz/` and `examples/`. The design notes are in `docs/DESIGN.md`.
+Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/connection/` for the connection modules, `src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), `testing/` for the server-side codec used by the tests and fuzzers (not installed), `fuzz/`, `examples/`, `packaging/` for the vcpkg ports and Conan recipes, and `versions/` for the vcpkg registry versions. The design notes are in `docs/DESIGN.md`.
 
 ## Conventions & Patterns
 
@@ -98,7 +100,7 @@ The `bd prime` memories have the details. In short:
 - Text handling is full UTF-8 everywhere. Never ship an ASCII-only restriction; implement the RFC preparation instead.
 - ICU is the Unicode dependency.
 - Don't use `std::optional<T&>`; lookups return pointers (null means not found).
-- Linux is the tested platform. Windows is code-ported but unverified (no Windows toolchain here; the user builds it): keep `_WIN32` branches compiling, check them with a mingw-w64 syntax check, and see docs/DEVELOPMENT.md "Windows". No macOS.
+- Linux is the tested platform. Windows is CI-verified for the build and unit tests (`.github/workflows/windows.yml`: MSVC 19.52 Debug, vcpkg ICU/OpenSSL). There is no local Windows toolchain: keep `_WIN32` branches compiling, check them locally with a mingw-w64 syntax check, let Windows CI confirm, and see docs/DEVELOPMENT.md "Windows". No macOS.
 - `examples/` holds bare one-action files of about 15-30 lines, with no helpers.
 - Format with `/usr/bin/clang-format` (v23).
 - Don't touch CI (`.github/workflows`, `gh run`) unless asked.
