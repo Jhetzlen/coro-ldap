@@ -215,6 +215,7 @@ TEST_CASE("start_tls: upgrade, then LDAP over TLS", "[net][starttls]")
 	CHECK_FALSE(c.channel_bindings().default_type.has_value());
 	auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
 	REQUIRE(r.has_value());
+	CHECK(r->is_tls());
 	CHECK(c.is_tls());
 	CHECK(c.is_open());
 	// The handshake's certificate and channel bindings (TLS 1.3).
@@ -258,7 +259,7 @@ TEST_CASE("start_tls: is_tls() is false while the handshake runs", "[net][startt
 	tcp_mock_ldap m;
 	m.serve({ answer(
 	  { ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } } }) });
-	outcome<ldap::result<void>> tls;
+	outcome<ldap::result<ldap::connection>> tls;
 	spawn(m.ioc, m.conn.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }, std::chrono::milliseconds(200)), tls);
 	bool seen_tls = false;
 	drive_until(m.ioc, [&] {
@@ -297,7 +298,7 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 	auto fail_one = [&](std::size_t failing) {
 		failing_frames frames;// outlives the io_context's coroutines
 		const clear_frame_allocator clear;
-		outcome<ldap::result<void>> tls;// outlive `m`: what still waits ends with it
+		outcome<ldap::result<ldap::connection>> tls;// outlive `m`: what still waits ends with it
 		outcome<int> sent;
 		tcp_mock_ldap m;
 		m.serve({ step{} });// reads the StartTLS request, answered below
@@ -350,7 +351,7 @@ TEST_CASE("start_tls: another exception in the handshake's setup closes the conn
 	auto fail_one = [&](std::size_t failing) {
 		failing_frames frames;// outlives the io_context's coroutines
 		const clear_frame_allocator clear;
-		outcome<ldap::result<void>> tls;// outlive `m`: what still waits ends with it
+		outcome<ldap::result<ldap::connection>> tls;// outlive `m`: what still waits ends with it
 		outcome<int> sent;
 		tcp_mock_ldap m;
 		m.serve({ step{} });// reads the StartTLS request, answered below
@@ -394,7 +395,7 @@ TEST_CASE("start_tls: another exception in the handshake's setup closes the conn
 // handshakes.
 TEST_CASE("start_tls: unbind during the handshake closes the connection", "[net][starttls]")
 {
-	outcome<ldap::result<void>> tls;// outlive `m`: what still waits ends with it
+	outcome<ldap::result<ldap::connection>> tls;// outlive `m`: what still waits ends with it
 	outcome<int> hello;
 	tcp_mock_ldap m;
 	m.serve({ answer(
@@ -584,7 +585,7 @@ TEST_CASE("start_tls: refused during a bind", "[net][starttls]")
 {
 	mock_ldap m;
 	m.serve({ step{} });// reads the bind, never answers
-	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<ldap::connection>> bind;
 	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 	auto r = m.run(m.conn.start_tls());
@@ -621,9 +622,9 @@ TEST_CASE("RFC 4511 4.14.1: requests are refused while StartTLS is in progress",
 	tls_fixture f;
 	f.serve(mode::upgrade);
 	auto c = f.connect();
-	outcome<ldap::result<void>> upgrade;
-	outcome<ldap::result<void>> bind;
-	outcome<ldap::result<void>> again;
+	outcome<ldap::result<ldap::connection>> upgrade;
+	outcome<ldap::result<ldap::connection>> bind;
+	outcome<ldap::result<ldap::connection>> again;
 	spawn(f.ioc, c.start_tls(trusting().tls), upgrade);
 	spawn(f.ioc, c.simple_bind(ldap::dn{}, ""), bind);
 	spawn(f.ioc, c.start_tls(trusting().tls), again);
@@ -694,7 +695,7 @@ TEST_CASE("RFC 4511 4.14.1: unbind while StartTLS waits for its response closes 
 	outcome<std::vector<ldap::message>> server;
 	spawn(f.ioc, silent_start_tls(f.acc), server);
 	auto c = f.connect();
-	outcome<ldap::result<void>> upgrade;
+	outcome<ldap::result<ldap::connection>> upgrade;
 	spawn(f.ioc, c.start_tls(trusting().tls), upgrade);
 	drive_until(f.ioc, [&c] { return c.outstanding() == 1; });// the StartTLS request is sent
 	REQUIRE(c.outstanding() == 1);

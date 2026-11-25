@@ -131,7 +131,7 @@ auto open_bound(corosio::io_context &ioc, bool start_tls, const ldap::dn &who, c
 auto try_bind(corosio::io_context &ioc, const ldap::dn &who, const std::string &password) -> ldap::result<void>
 {
 	auto c = open_tls(ioc, false);
-	return finish(ioc, c.simple_bind(who, password));
+	return finish(ioc, c.simple_bind(who, password)).transform([](const ldap::connection &) {});
 }
 
 void reset(corosio::io_context &ioc, const ldap::dn &who, const std::string &password)
@@ -483,7 +483,7 @@ TEST_CASE("samba ad: sasl_ntlm channel binding policy", "[samba_ad][ntlm]")
 	CAPTURE(start_tls);
 	// A refused binding is invalidCredentials with SEC_E_BAD_BINDINGS
 	// (0x80090346) in Windows' diagnostic format.
-	const auto bad_bindings = [](const ldap::result<void> &r) {
+	const auto bad_bindings = [](const ldap::result<ldap::connection> &r) {
 		REQUIRE_FALSE(r.has_value());
 		INFO(r.error().message());
 		CHECK(r.error().code == ldap::errc::invalid_credentials);

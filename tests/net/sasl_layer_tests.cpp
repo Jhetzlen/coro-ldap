@@ -564,7 +564,7 @@ TEST_CASE("sasl layer: sasl_bind installs the negotiated layer", "[net][sasl][sa
 		outcome<void> server;
 		spawn(m.ioc, serve_layered_bind(m.server_end(), frame(notice), error), server);
 		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
-		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::connection>> bind;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		outcome<ldap::result<ldap::search_result>> search;
 		spawn(m.ioc, m.conn.search(people_search()), search);

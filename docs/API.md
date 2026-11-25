@@ -466,6 +466,15 @@ itself needs only ICU.
   connecting and a bad one fails with `url::parse`'s `invalid_url`. A
   connection can also be built on any `net::transport` with
   `connection(ioc, transport, options, mr)`.
+  Binds and StartTLS (`simple_bind`, `sasl_bind`, `start_tls`) return
+  `task<result<connection>>`: a copy of the handle on success, another
+  handle on the same session (`.and_then` chains on it), the error alone
+  on failure, the caller's handle staying valid; a failed bind leaves the
+  session anonymous for every copy (RFC 4511 section 4.2.1). Breaking
+  (coro-ldap-j0e): they returned `task<result<void>>`; `session_setup`
+  stays `task<result<void>>` (a setup returning a bind's task converts its
+  result). DESIGN.md section 7, "Binds return the handle", has why no
+  `bound_connection` type.
   Operations: `simple_bind(dn, password)` (an empty name and password is
   anonymous; a name with an empty password is refused with
   `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2; a password
@@ -1418,7 +1427,14 @@ itself needs only ICU.
   `std::vector<std::byte>`, `default_type`, `get(type)`), all copied, and
   `executor()` is the I/O thread's, not the connection's strand (a
   default-constructed one returns empty or zero values: `name()`,
-  `outstanding()`, `bind_count()`); `search_stream(params, mr)` returns a
+  `outstanding()`, `bind_count()`); `simple_bind`, `sasl_bind` and
+  `start_tls` return `result<sync::connection>`, a copy of the handle (a
+  sync lease's return `result<std::reference_wrapper<lease>>`, the lease
+  itself: a lease is move-only and a copy of its connection would not be
+  a lease), so `sync::connect(...).and_then(bind).and_then(search)` reads
+  flat (`examples/chain.cpp`); on failure the error alone, the handle
+  staying valid and the session anonymous after a failed bind. Breaking
+  (coro-ldap-j0e): they returned `result<void>`. `search_stream(params, mr)` returns a
   `sync::search_stream`, whose `next()` and `next_item()` block until the
   next message, `done()`, `references()`, `reference_urls(mr)` and
   `controls()` copy the stream's state from the I/O thread, and which
@@ -1482,7 +1498,10 @@ itself needs only ICU.
   `close` through a shared lease change the session for every lease
   sharing it); `acquire_exclusive() -> task<result<exclusive_lease>>`, the
   full `connection` on an idle or new connection nobody else uses while it
-  is held (for binds, `start_tls()`, `unbind()`). A lease returns the connection when destroyed
+  is held (for binds, `start_tls()`, `unbind()`). The handle a bind or
+  `start_tls()` through a lease returns (coro-ldap-j0e) is a copy of the
+  leased connection, not a lease: keep chaining on it only while the lease
+  is held. A lease returns the connection when destroyed
   or `release()`d. `max_connections` must be at least 1: 0 makes every
   `acquire()` and `acquire_exclusive()` fail with
   `std::errc::invalid_argument`. `acquire()` waits at most

@@ -285,7 +285,7 @@ auto only_tls_handshake_records(std::string_view bytes) -> bool
 // During StartTLS's handshake a password change is refused, nothing sent.
 TEST_CASE("ad::change_password: during StartTLS, refused before sending", "[net][password][starttls]")
 {
-	outcome<ldap::result<void>> tls;// outlive `m`
+	outcome<ldap::result<ldap::connection>> tls;// outlive `m`
 	outcome<std::string> hello;
 	outcome<std::string> rest;
 	tcp_mock_ldap m;

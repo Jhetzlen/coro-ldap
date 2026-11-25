@@ -46,6 +46,17 @@ auto detail::accepts_requests(const connection &c) noexcept -> bool
 	return c.core_ && c.core_->published_accepts_requests();
 }
 
+auto connection::returning_handle(core_ref self, capy::task<result<void>> body) -> capy::task<result<connection>>
+{
+	if (auto r = co_await std::move(body); !r) {
+		co_return std::unexpected(std::move(r.error()));
+	}
+	connection handle;
+	handle.core_ = std::move(self);
+	handle.core_->add_handle();
+	co_return handle;
+}
+
 connection::connection(corosio::io_context &ioc,
   net::transport t,
   const connection_options &options,

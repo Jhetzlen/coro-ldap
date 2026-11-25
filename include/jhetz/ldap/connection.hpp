@@ -110,11 +110,12 @@ class connection
 	// Bind exchanges begun, whatever their outcome.
 	[[nodiscard]] auto bind_count() const noexcept -> std::uint64_t;
 
-	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1).
-	auto simple_bind(dn name, std::string password) -> boost::capy::task<result<void>>;
+	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1); a copy of
+	// *this on success.
+	auto simple_bind(dn name, std::string password) -> boost::capy::task<result<connection>>;
 
-	// SASL bind (RFC 4513 section 5.2).
-	auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> boost::capy::task<result<void>>;
+	// SASL bind (RFC 4513 section 5.2); a copy of *this on success.
+	auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> boost::capy::task<result<connection>>;
 
 	// Runs a search to its end; entries are allocated from `mr`.
 	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
@@ -131,9 +132,10 @@ class connection
 	auto compare(compare_params request) -> boost::capy::task<result<compare_result>>;
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 
-	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection.
+	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection;
+	// a copy of *this on success.
 	auto start_tls(net::tls_options options = {}, std::optional<std::chrono::milliseconds> timeout = std::nullopt)
-	  -> boost::capy::task<result<void>>;
+	  -> boost::capy::task<result<connection>>;
 
 	// Sends an UnbindRequest and closes (RFC 4511 section 4.3).
 	auto unbind() -> boost::capy::task<result<void>>;
@@ -148,6 +150,10 @@ class connection
 	friend struct detail::test_access;
 	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
 	friend auto detail::accepts_requests(const connection &) noexcept -> bool;
+
+	// A new handle on `self` once `body` succeeds, else its error.
+	static auto returning_handle(detail::counted_ref<core> self, boost::capy::task<result<void>> body)
+	  -> boost::capy::task<result<connection>>;
 
 	// Shared state kept alive by operations, streams and transactions.
 	detail::counted_ref<core> core_;

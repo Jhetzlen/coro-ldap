@@ -46,13 +46,21 @@ namespace jhetz::ldap {
 
 namespace {
 
+	auto setup_done(capy::task<result<connection>> bind) -> capy::task<result<void>>
+	{
+		if (auto r = co_await std::move(bind); !r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return result<void>{};
+	}
+
 	auto sasl_setup_run(connection &c, std::unique_ptr<sasl_mechanism> mechanism, dn name) -> capy::task<result<void>>
 	{
 		if (mechanism == nullptr) {
 			co_return fail(std::make_error_code(std::errc::invalid_argument),
 			  "session setup: the SASL mechanism factory returned null");
 		}
-		co_return co_await c.sasl_bind(*mechanism, std::move(name));
+		co_return co_await setup_done(c.sasl_bind(*mechanism, std::move(name)));
 	}
 
 }// namespace
@@ -60,7 +68,7 @@ namespace {
 auto simple_bind_setup(dn name, std::string password) -> session_setup
 {
 	return [name = std::move(name), password = std::move(password)](
-			 connection &c) -> capy::task<result<void>> { return c.simple_bind(name, password); };
+			 connection &c) -> capy::task<result<void>> { return setup_done(c.simple_bind(name, password)); };
 }
 
 auto sasl_bind_setup(sasl_mechanism_factory factory, dn name) -> session_setup

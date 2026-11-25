@@ -274,7 +274,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		mock_ldap m;
 		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3, 48, "anonymous bind disallowed") }) });
 		echo_mechanism mech;
-		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::connection>> bind;
 		outcome<ldap::result<ldap::search_result>> search;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
@@ -295,7 +295,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		mock_ldap m;
 		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3, 14) }), client_hangs_up() });
 		echo_mechanism mech;
-		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::connection>> bind;
 		outcome<ldap::result<ldap::search_result>> search;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
@@ -372,7 +372,7 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 	  answer({ sasl_resp(4, 0, "server-final") }),
 	  answer({ done_msg(2) }) });
 	echo_mechanism mech;
-	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<ldap::connection>> bind;
 	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
@@ -392,7 +392,7 @@ TEST_CASE("sasl: a failed exchange is aborted and the requests it held fail unse
 	mock_ldap m;
 	m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3) }), answer({ done_msg(4) }) });
 	echo_mechanism mech;
-	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<ldap::connection>> bind;
 	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
@@ -418,22 +418,23 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 {
 	// The server reads the abort, answers nothing, and then sees the
 	// client hang up: nothing else is sent.
-	auto check =
-	  [](mock_ldap &m, outcome<ldap::result<void>> &bind, outcome<ldap::result<ldap::search_result>> &search) {
-		  REQUIRE_FALSE(bind.get().has_value());
-		  CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
-		  CHECK_FALSE(m.conn.is_open());
-		  REQUIRE_FALSE(search.get().has_value());
-		  CHECK(search.get().error().code == ldap::client_errc::not_sent);
-		  CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
-		  m.sockets.client.close();// closing a wrapped transport leaves the socket open
-		  m.check_server();
-		  REQUIRE(m.log.received.size() == 2);
-		  CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
-		  CHECK(m.log.received[1] == abort_req(3));
-	  };
+	auto check = [](mock_ldap &m,
+				   outcome<ldap::result<ldap::connection>> &bind,
+				   outcome<ldap::result<ldap::search_result>> &search) {
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
+		CHECK_FALSE(m.conn.is_open());
+		REQUIRE_FALSE(search.get().has_value());
+		CHECK(search.get().error().code == ldap::client_errc::not_sent);
+		CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
+		CHECK(m.log.received[1] == abort_req(3));
+	};
 	echo_mechanism mech;
-	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<ldap::connection>> bind;
 	outcome<ldap::result<ldap::search_result>> search;
 	SECTION("timeout")
 	{
@@ -636,7 +637,7 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 		offload_mechanism mech;
 		const open_at_exit opener{ mech.gate };
 		std::stop_source stop;
-		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::connection>> bind;
 		spawn(m.ioc, stop.get_token(), m.conn.sasl_bind(mech), bind);
 		poll_until(m.ioc, [&] { return mech.gate->started == 1; });
 		REQUIRE(mech.gate->started == 1);
@@ -677,7 +678,7 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 		const open_at_exit opener{ mech.gate };
 		mech.gate->allow(1);
 		std::stop_source stop;
-		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::connection>> bind;
 		spawn(m.ioc, stop.get_token(), m.conn.sasl_bind(mech), bind);
 		poll_until(m.ioc, [&] { return mech.gate->started == 2; });
 		REQUIRE(mech.gate->started == 2);
@@ -879,10 +880,11 @@ TEST_CASE("sasl: SCRAM-SHA-256 runs a costly PBKDF2 off the I/O thread", "[net][
 	mock_ldap m;
 	m.serve({ answer({ sasl_resp(1, 14, server_first) }), answer({ sasl_resp(2, 49) }) });
 	auto mech = ldap::detail::scram_test_access::with_nonce("user", "pencil", "", "fixednonce");
-	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<ldap::connection>> bind;
 	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 	int ticks = 0;// while the server waits for the client-final-message
-	auto ticker = [](const server_log &log, const outcome<ldap::result<void>> &b, int &n) -> capy::task<void> {
+	auto ticker =
+	  [](const server_log &log, const outcome<ldap::result<ldap::connection>> &b, int &n) -> capy::task<void> {
 		while (!b.done()) {
 			(void)co_await corosio::delay(1ms);
 			if (log.received.size() == 1) {

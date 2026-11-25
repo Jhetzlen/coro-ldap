@@ -127,10 +127,10 @@ namespace {
 }// namespace
 
 auto connection::start_tls(net::tls_options options, std::optional<std::chrono::milliseconds> timeout)
-  -> capy::task<result<void>>
+  -> capy::task<result<connection>>
 {
 	const core_ref self(core_);
-	return detail::on_strand(self, start_tls_impl(self, std::move(options), timeout));
+	return returning_handle(self, detail::on_strand(self, start_tls_impl(self, std::move(options), timeout)));
 }
 
 }// namespace jhetz::ldap

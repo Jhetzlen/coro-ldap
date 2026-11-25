@@ -2901,6 +2901,51 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap`):
 - The facade exposes exactly the same request, entry, error and mapping types;
   only the calling convention differs.
 
+### Binds return the handle (coro-ldap-j0e)
+
+`simple_bind`, `sasl_bind` and `start_tls` return the connection handle
+on success (`task<result<connection>>`, a copy of `*this`;
+`result<sync::connection>` on the blocking facade), so a session reads as
+one flat chain:
+
+```cpp
+auto people = ldap::sync::connect(url, {.start_tls = true})
+  .and_then([&](ldap::sync::connection c) { return c.simple_bind(name, password); })
+  .and_then([&](ldap::sync::connection c) { return c.search({...}); });
+```
+
+On failure they return the error only; the caller's handle stays valid
+(and anonymous after a failed bind). The pending task holds the state, not
+a handle: the handle is made once the exchange succeeded, so destroying
+every handle still closes the connection and fails a bind in flight. A sync lease is move-only, so its
+binds return `std::reference_wrapper` to the lease itself: a copy of the
+leased connection would not be a lease (the pool neither counts it nor
+keeps it from closing), so none is handed out. Through an async lease
+(`lease->simple_bind(...)`) the copy returned is the leased connection's,
+as `connection c = *lease` would be; it is not a lease either.
+
+Typestate, a bind returning a distinct `bound_connection` type that alone
+offers the directory operations, was considered and rejected:
+
+1. RFC 4513 allows operations before any bind (anonymous, section 5.1.1;
+   an anonymous bind is optional), so the unbound type must keep every
+   operation anyway and the bound type adds nothing.
+2. The authentication state changes within a session: a rebind as another
+   identity, an anonymous rebind, StartTLS, a multi-step SASL exchange,
+   and a failed bind resetting the session to anonymous (RFC 4511 section
+   4.2.1). The states multiply (TLS x bound x security layer) and each
+   transition would need a type.
+3. A connection is a copyable handle and copies share one session: a
+   rebind through one copy would make another copy's static type lie.
+4. The server (a Notice of Disconnection, an expired identity) or a
+   connection loss changes the real state at runtime, which no static
+   type can follow.
+
+Returning the same handle gives the chaining without false guarantees.
+Free-function binds taking the connection by rvalue (`bind(std::move(c),
+...) -> result<connection>`) were rejected as well: a failed bind would
+lose the connection along with the error.
+
 ## 8. Ownership and threading
 
 - Public types (`dn`, `entry`, `error`, user structs, requests) own their data

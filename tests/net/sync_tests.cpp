@@ -78,6 +78,26 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK(after.error().code == ldap::client_errc::not_sent);
 }
 
+TEST_CASE("sync: connect, bind and search as one chain", "[net][sync][bind]")
+{
+	server_thread srv;
+	auto r =
+	  ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true })
+		.and_then(
+		  [](ldap::sync::connection c) { return c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"); })
+		.and_then(
+		  [](ldap::sync::connection c) { return c.search({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }); });
+	REQUIRE(r.has_value());
+	CHECK(r->entries.size() == 2);
+
+	auto opened =
+	  ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
+	REQUIRE(opened.has_value());
+	auto bad = opened->simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "wrong");
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(opened->is_open());
+}
+
 TEST_CASE("sync: name, outstanding, bind_count and channel_bindings", "[net][sync]")
 {
 	ldap::sync::connection none;

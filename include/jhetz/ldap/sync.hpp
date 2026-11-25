@@ -61,6 +61,18 @@ namespace detail {
 	[[noreturn]] void fatal(const char *facade, const char *what) noexcept;
 
 	[[nodiscard]] auto done() -> boost::capy::task<result<void>>;
+	// Success or the error of `bind`, a bind or StartTLS.
+	[[nodiscard]] auto bound(boost::capy::task<result<ldap::connection>> bind) -> boost::capy::task<result<void>>;
+
+	// What a facade's binds and StartTLS return on success.
+	template<class D> struct chain_handle
+	{
+		using type = D;
+	};
+	template<bool Exclusive> struct chain_handle<basic_lease<Exclusive>>
+	{
+		using type = std::reference_wrapper<basic_lease<Exclusive>>;
+	};
 
 	// An io_context and the one thread running it.
 	class io_thread
@@ -323,20 +335,26 @@ namespace detail {
 			  .value_or(sync::channel_bindings{});
 		}
 
-		[[nodiscard]] auto simple_bind(dn name, std::string password) -> result<void>
+		// The binds and StartTLS return a copy of a sync::connection, a
+		// reference to a lease.
+		[[nodiscard]] auto simple_bind(dn name, std::string password) -> result<typename chain_handle<Derived>::type>
 		{
-			return self().call(
-			  [&](ldap::connection &c) { return c.simple_bind(std::move(name), std::move(password)); });
+			return handle_after(self().call(
+			  [&](ldap::connection &c) { return bound(c.simple_bind(std::move(name), std::move(password))); }));
 		}
 		// `mechanism` is used on the I/O thread while the call runs.
-		[[nodiscard]] auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> result<void>
+		[[nodiscard]] auto sasl_bind(sasl_mechanism &mechanism, dn name = {})
+		  -> result<typename chain_handle<Derived>::type>
 		{
-			return self().call([&](ldap::connection &c) { return c.sasl_bind(mechanism, std::move(name)); });
+			return handle_after(
+			  self().call([&](ldap::connection &c) { return bound(c.sasl_bind(mechanism, std::move(name))); }));
 		}
 		[[nodiscard]] auto start_tls(net::tls_options options = {},
-		  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<void>
+		  std::optional<std::chrono::milliseconds> timeout = std::nullopt)
+		  -> result<typename chain_handle<Derived>::type>
 		{
-			return self().call([&](ldap::connection &c) { return c.start_tls(std::move(options), timeout); });
+			return handle_after(
+			  self().call([&](ldap::connection &c) { return bound(c.start_tls(std::move(options), timeout)); }));
 		}
 
 		[[nodiscard]] auto search(search_params request,
@@ -393,6 +411,13 @@ namespace detail {
 		connection_api() = default;
 
 		[[nodiscard]] auto self() noexcept -> Derived & { return static_cast<Derived &>(*this); }
+		[[nodiscard]] auto handle_after(result<void> r) -> result<typename chain_handle<Derived>::type>
+		{
+			if (!r) {
+				return std::unexpected(std::move(r.error()));
+			}
+			return typename chain_handle<Derived>::type(self());
+		}
 		[[nodiscard]] auto self() const noexcept -> const Derived & { return static_cast<const Derived &>(*this); }
 	};
 

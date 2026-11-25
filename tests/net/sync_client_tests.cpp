@@ -25,9 +25,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <future>
 #include <memory_resource>
 #include <optional>
@@ -61,6 +63,18 @@ concept all_session_operations = requires(C &c, ldap::sasl_mechanism &m) {
 static_assert(all_session_operations<ldap::sync::connection>);
 static_assert(all_session_operations<ldap::sync::lease>);
 static_assert(all_session_operations<ldap::sync::exclusive_lease>);
+
+// Binds and StartTLS return the facade: a copy of a connection, a reference to a lease.
+template<class C, class Handle>
+concept returns_handle = requires(C &c, ldap::sasl_mechanism &m) {
+	{ c.simple_bind(ldap::dn{}, std::string{}) } -> std::same_as<ldap::result<Handle>>;
+	{ c.sasl_bind(m) } -> std::same_as<ldap::result<Handle>>;
+	{ c.start_tls() } -> std::same_as<ldap::result<Handle>>;
+};
+
+static_assert(returns_handle<ldap::sync::connection, ldap::sync::connection>);
+static_assert(returns_handle<ldap::sync::lease, std::reference_wrapper<ldap::sync::lease>>);
+static_assert(returns_handle<ldap::sync::exclusive_lease, std::reference_wrapper<ldap::sync::exclusive_lease>>);
 
 auto pki() -> test_pki &
 {

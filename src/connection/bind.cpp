@@ -217,16 +217,17 @@ namespace {
 
 }// namespace
 
-auto connection::simple_bind(dn name, std::string password) -> capy::task<result<void>>
+auto connection::simple_bind(dn name, std::string password) -> capy::task<result<connection>>
 {
 	const core_ref self(core_);
-	return detail::on_strand(self, simple_bind_impl(self, std::move(name), std::move(password)));
+	return returning_handle(
+	  self, detail::on_strand(self, simple_bind_impl(self, std::move(name), std::move(password))));
 }
 
-auto connection::sasl_bind(sasl_mechanism &mechanism, dn name) -> capy::task<result<void>>
+auto connection::sasl_bind(sasl_mechanism &mechanism, dn name) -> capy::task<result<connection>>
 {
 	const core_ref self(core_);
-	return detail::on_strand(self, sasl_bind_impl(self, mechanism, std::move(name)));
+	return returning_handle(self, detail::on_strand(self, sasl_bind_impl(self, mechanism, std::move(name))));
 }
 
 }// namespace jhetz::ldap

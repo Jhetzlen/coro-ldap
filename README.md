@@ -68,13 +68,17 @@ namespace ldap = jhetz::ldap;
 
 auto main() -> int
 {
-	auto conn = ldap::sync::connect("ldap://localhost", { .start_tls = true });
-	if (!conn || !conn->simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")) return 1;
-	auto people = conn->search({
-	  .base = ldap::dn{ "ou=people,dc=example,dc=org" },
-	  .filter = ldap::filters::attr("uid").starts_with("user00"),
-	  .attributes = { "cn" },
-	});
+	auto people = ldap::sync::connect("ldap://localhost", { .start_tls = true })
+	  .and_then([](ldap::sync::connection c) {
+		  return c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret");
+	  })
+	  .and_then([](ldap::sync::connection c) {
+		  return c.search({
+			.base = ldap::dn{ "ou=people,dc=example,dc=org" },
+			.filter = ldap::filters::attr("uid").starts_with("user00"),
+			.attributes = { "cn" },
+		  });
+	  });
 	if (!people) return 1;
 	for (const ldap::entry &person : people->entries) std::cout << person.dn << '\n';
 }

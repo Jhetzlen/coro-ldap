@@ -40,6 +40,14 @@ namespace detail {
 
 	auto done() -> capy::task<result<void>> { co_return result<void>{}; }
 
+	auto bound(capy::task<result<ldap::connection>> bind) -> capy::task<result<void>>
+	{
+		if (auto r = co_await std::move(bind); !r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return result<void>{};
+	}
+
 	io_thread::io_thread(const char *facade) : facade_(facade)
 	{
 		guard_.emplace(ioc_.get_executor());

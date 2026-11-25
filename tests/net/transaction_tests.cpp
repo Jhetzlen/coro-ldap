@@ -346,7 +346,7 @@ TEST_CASE("transaction: destroyed during a bind that fails, it is still aborted"
 	  step{ .read_request = false, .replies = { bytes_of(bind_resp(2, 49)) } },
 	  answer({ ended(3, 0, {}) }),// the abort's answer: dropped
 	  answer({ started(4) }) });
-	outcome<ldap::result<void>> bound;
+	outcome<ldap::result<ldap::connection>> bound;
 	{
 		auto t = m.run(ldap::transaction::begin(m.conn));
 		REQUIRE(t.has_value());

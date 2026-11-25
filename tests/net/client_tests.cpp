@@ -850,7 +850,7 @@ TEST_CASE("client: a connection whose identity changed is not shared", "[net][cl
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(5'000) });
 		auto a = f.acquire();
 		REQUIRE(a.has_value());
-		outcome<ldap::result<void>> bound;
+		outcome<ldap::result<ldap::connection>> bound;
 		spawn(f.ioc, full(*a).simple_bind(jdoe, "pw"), bound);
 		drive_until(f.ioc, [&s] { return s.log(0).received.size() == 2; });
 		auto b = f.acquire();
@@ -1904,7 +1904,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		outcome<ldap::result<ldap::compare_result>> compared;
 		spawn(f.ioc, f.pool->compare(jdoe_compare()), compared);// shares `mine`'s connection
 		drive_until(f.ioc, [&a] { return a.log(0).received.size() == 2; });
-		outcome<ldap::result<void>> bound;
+		outcome<ldap::result<ldap::connection>> bound;
 		const auto binds = (*mine)->bind_count();
 		spawn(f.ioc, full(*mine).simple_bind(jdoe, "pw"), bound);
 		drive_until(f.ioc, [&] { return (*mine)->bind_count() != binds; });// binding: not handed out

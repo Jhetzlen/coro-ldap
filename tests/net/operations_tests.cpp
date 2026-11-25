@@ -994,7 +994,7 @@ void check_release(const ldap::message &req, const ldap::message &first, std::st
 	CHECK(p->cookie == cookie);
 }
 
-auto bind_admin(ldap::connection &c) -> capy::task<ldap::result<void>>
+auto bind_admin(ldap::connection &c) -> capy::task<ldap::result<ldap::connection>>
 {
 	co_return co_await c.simple_bind(*ldap::dn::parse(admin), "secret");
 }
@@ -1389,7 +1389,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		  step{ .read_request = false, .replies = { bytes_of(bind_resp(2)) } },
 		  answer({ paged_done(3, "") }),// the release's answer: dropped
 		  answer({ bind_resp(4) }) });
-		outcome<ldap::result<void>> bound;
+		outcome<ldap::result<ldap::connection>> bound;
 		{
 			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
@@ -1430,7 +1430,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		  step{ .read_request = false, .replies = { bytes_of(bind_resp(2, 49)) } },
 		  answer({ paged_done(3, "") }),// the release's answer: dropped
 		  answer({ bind_resp(4) }) });
-		outcome<ldap::result<void>> bound;
+		outcome<ldap::result<ldap::connection>> bound;
 		{
 			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
@@ -1567,7 +1567,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{},// reads the release, does not answer
 		  answer({ start_tls_refused(3) }) });
 		release_after_one_page(m);
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
@@ -1592,7 +1592,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{},// reads the release, does not answer
 		  answer({ start_tls_refused(3) }) });
 		release_after_one_page(m);
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
@@ -1621,8 +1621,8 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{},// reads the release, does not answer
 		  answer({ start_tls_refused(3) }) });
 		release_after_one_page(m);
-		outcome<ldap::result<void>> first;
-		outcome<ldap::result<void>> second;
+		outcome<ldap::result<ldap::connection>> first;
+		outcome<ldap::result<ldap::connection>> second;
 		spawn(m.ioc, m.conn.start_tls(), first);
 		spawn(m.ioc, m.conn.start_tls(), second);
 		while (m.ioc.poll() != 0) {}
@@ -1671,7 +1671,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{},// reads the release, does not answer
 		  step{} });// reads the bind, does not answer
 		release_after_one_page(m);
-		outcome<ldap::result<void>> bound;
+		outcome<ldap::result<ldap::connection>> bound;
 		spawn(m.ioc, bind_admin(m.conn), bound);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });
 		auto r = m.run(m.conn.start_tls());
@@ -1691,11 +1691,11 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{},// reads the release, does not answer
 		  step{} });// reads the bind, does not answer
 		release_after_one_page(m);
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
-		outcome<ldap::result<void>> bound;
+		outcome<ldap::result<ldap::connection>> bound;
 		spawn(m.ioc, bind_admin(m.conn), bound);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });
 		CHECK_FALSE(tls.done());
@@ -1768,7 +1768,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		CHECK(r.error().context == "start tls (waiting for the answer to 1 paged search release)");
 
 		std::stop_source cancel;
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.start_tls()), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
@@ -1793,7 +1793,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{} });// reads the release, does not answer
 		release_after_one_page(m);
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
@@ -1811,7 +1811,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{},// reads the release, never answers
 		  step{} });// reads the UnbindRequest
 		release_after_one_page(m);
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
@@ -1831,7 +1831,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{} });// reads the release, never answers; nothing reads after it
 		release_after_one_page(m);
 		m.check_server();
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls({}, std::chrono::milliseconds(100)), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
@@ -1942,7 +1942,7 @@ TEST_CASE("operations: StartTLS after waiting for a release's answer has its who
 	  step{},// reads the release, never answers
 	  step{} });// reads StartTLS, answered late below
 	release_after_one_page(m);
-	outcome<ldap::result<void>> tls;
+	outcome<ldap::result<ldap::connection>> tls;
 	spawn(m.ioc, m.conn.start_tls(), tls);
 	drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });// once the release's deadline passed
 	REQUIRE(m.log.received.size() == 3);
@@ -1970,7 +1970,7 @@ TEST_CASE("operations: StartTLS whose wait times out with a release's deadline p
 	  answer({ start_tls_refused(3) }) });
 	const auto start = std::chrono::steady_clock::now();
 	release_after_one_page(m);
-	outcome<ldap::result<void>> tls;
+	outcome<ldap::result<ldap::connection>> tls;
 	spawn(m.ioc, m.conn.start_tls(), tls);
 	settle(m);// StartTLS waits for the release's answer
 	// Only while the release's deadline is surely ahead: under load, the
@@ -1999,7 +1999,7 @@ TEST_CASE("operations: a paged search destroyed during StartTLS sends no release
 	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 	  step{},// reads StartTLS, answered below
 	  answer({ bind_resp(3) }) });
-	outcome<ldap::result<void>> tls;
+	outcome<ldap::result<ldap::connection>> tls;
 	{
 		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
@@ -2041,7 +2041,7 @@ TEST_CASE("operations: a paged search whose next page could not be sent releases
 		REQUIRE(e.has_value());
 		REQUIRE(e->has_value());
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		outcome<ldap::result<void>> tls;
+		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 		auto next = m.run(s->next());// page 1 ended: page 2 is refused
@@ -2275,7 +2275,7 @@ TEST_CASE("operations: StartTLS waits for a release's answer whose reader could 
 {
 	failing_frames frames;// outlives the io_context's coroutines
 	const clear_frame_allocator clear;
-	outcome<ldap::result<void>> tls;// outlives `m`: a StartTLS still waiting ends with it
+	outcome<ldap::result<ldap::connection>> tls;// outlives `m`: a StartTLS still waiting ends with it
 	tcp_mock_ldap m;
 	auto start_tls = [&m, &tls] {
 		spawn(m.ioc, m.conn.start_tls(), tls);
@@ -2446,7 +2446,7 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 	}
 	SECTION("the requests a bind held, sent as it ends: they fail")
 	{
-		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::connection>> bind;
 		spawn(m.ioc, bind_admin(m.conn), bind);
 		settle_now();// the BindRequest is written
 		outcome<ldap::result<ldap::response>> add;

@@ -508,6 +508,7 @@ URL (`ldap://localhost`).
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `paged.cpp` | page through `ou=people` 100 entries at a time, sorted by `mail` (RFC 2696 paging, RFC 2891 server-side sort) |
 | `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |
+| `chain.cpp` | connect with StartTLS, bind, search `uid=jdoe` and print its `mail`, as one `and_then` / `transform` / `or_else` chain over the blocking `ldap::sync::connection` |
 | `sync_pool.cpp` | the same search through the blocking pool `ldap::sync::client` |
 | `sync_repository.cpp` | every person with a `mail` through an `ldap::repository` over the blocking `ldap::sync::connection`, 100 per page, collected (`search_paged`) |
 | `referrals.cpp` | search `dc=example,dc=org` and follow its referrals to hosts under `example.org` (`chase_search` with `make_same_policy_connector`) |
