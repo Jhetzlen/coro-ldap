@@ -5,6 +5,7 @@
 #include "icu_util.hpp"
 #include "sasl_util.hpp"
 #include "scope_util.hpp"
+#include "wipe_util.hpp"
 
 #include "net/channel_binding.hpp"
 
@@ -16,7 +17,6 @@
 
 #include <unicode/uchar.h>
 #include <unicode/usprep.h>
-#include <unicode/ustring.h>
 #include <unicode/utypes.h>
 
 #include <algorithm>
@@ -126,21 +126,6 @@ namespace {
 
 	// ------------------------------------------------------------ input preparation
 
-	// A buffer that may hold (a form of) the password, wiped before it is freed.
-	template<class T> struct wiped_buffer
-	{
-		std::vector<T> v;
-		explicit wiped_buffer(std::size_t n) : v(n) {}
-		wiped_buffer(const wiped_buffer &) = delete;
-		auto operator=(const wiped_buffer &) -> wiped_buffer & = delete;
-		~wiped_buffer() { OPENSSL_cleanse(v.data(), v.size() * sizeof(T)); }
-	};
-
-	struct usprep_closer
-	{
-		void operator()(UStringPrepProfile *p) const noexcept { usprep_close(p); }
-	};
-
 	// Treat the string as RFC 3454's "stored string" (unassigned code points
 	// are refused) or as a "query" (they are passed through).
 	enum class prep_kind : std::uint8_t { query, stored };
@@ -163,73 +148,44 @@ namespace {
 			return input_error(name + " is too long");
 		}
 
-		// UTF-8 -> UTF-16. u_strFromUTF8 refuses ill-formed UTF-8 (overlong
-		// forms, surrogates, code points above U+10FFFF, truncated sequences).
-		UErrorCode status = U_ZERO_ERROR;
-		int32_t n16 = 0;
-		u_strFromUTF8(nullptr, 0, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
-		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND) {
+		std::vector<UChar> in;
+		std::vector<UChar> prepared;
+		const detail::scope_exit wipe{ [&] noexcept {
+			detail::wipe_vector(in);
+			detail::wipe_vector(prepared);
+		} };
+		UErrorCode status = detail::to_utf16(s, in);
+		if (detail::is_invalid_utf8(status)) {
 			return input_error(name + " is not valid UTF-8");
 		}
-		if (status != U_BUFFER_OVERFLOW_ERROR && icu_failed(status)) {
-			return icu_failure(name, status);
-		}
-		wiped_buffer<UChar> in(static_cast<std::size_t>(n16));
-		status = U_ZERO_ERROR;
-		u_strFromUTF8(in.v.data(), n16, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
 		if (icu_failed(status)) {
 			return icu_failure(name, status);
 		}
 
 		status = U_ZERO_ERROR;
-		const std::unique_ptr<UStringPrepProfile, usprep_closer> profile(
-		  usprep_openByType(USPREP_RFC4013_SASLPREP, &status));
+		const detail::usprep_ptr profile(usprep_openByType(USPREP_RFC4013_SASLPREP, &status));
 		if (icu_failed(status)) {
 			return icu_failure(name, status);
 		}
 		const int32_t options = kind == prep_kind::stored ? USPREP_DEFAULT : USPREP_ALLOW_UNASSIGNED;
-		const auto prepare = [&](UChar *dest, int32_t capacity) {
-			UParseError where{};
-			status = U_ZERO_ERROR;
-			return usprep_prepare(profile.get(), in.v.data(), n16, dest, capacity, options, &where, &status);
-		};
-		// The prepared length first (NFKC may make the string longer).
-		int32_t nprep = prepare(nullptr, 0);
-		switch (status) {
-		case U_BUFFER_OVERFLOW_ERROR:
-		case U_STRING_NOT_TERMINATED_WARNING:
-		case U_ZERO_ERROR:
-			break;
-		case U_STRINGPREP_PROHIBITED_ERROR:
+		status = detail::stringprep(profile.get(), options, in, prepared);
+		if (status == U_STRINGPREP_PROHIBITED_ERROR) {
 			return input_error(name + " contains a character prohibited by SASLprep (RFC 4013 section 2.3)");
-		case U_STRINGPREP_UNASSIGNED_ERROR:
+		}
+		if (status == U_STRINGPREP_UNASSIGNED_ERROR) {
 			return input_error(name + " contains a code point unassigned in Unicode 3.2 (RFC 4013 section 2.5)");
-		case U_STRINGPREP_CHECK_BIDI_ERROR:
+		}
+		if (status == U_STRINGPREP_CHECK_BIDI_ERROR) {
 			return input_error(name + " breaks the bidirectional text rules of SASLprep (RFC 3454 section 6)");
-		default:
+		}
+		if (icu_failed(status)) {
 			return icu_failure(name, status);
 		}
-		if (nprep == 0) {
+		if (prepared.empty()) {
 			return input_error(name + " is empty after SASLprep");
 		}
-		wiped_buffer<UChar> prepared(static_cast<std::size_t>(nprep));
-		nprep = prepare(prepared.v.data(), nprep);
-		if (icu_failed(status)) {
-			return icu_failure(name, status);
-		}
 
-		// UTF-16 -> UTF-8, straight into `out` (sized once: no copy of the
-		// text is left in a freed buffer).
-		status = U_ZERO_ERROR;
-		int32_t n8 = 0;
-		u_strToUTF8(nullptr, 0, &n8, prepared.v.data(), nprep, &status);
-		if (status != U_BUFFER_OVERFLOW_ERROR && icu_failed(status)) {
-			return icu_failure(name, status);
-		}
-		out.resize(static_cast<std::size_t>(n8));
-		status = U_ZERO_ERROR;
-		u_strToUTF8(out.data(), n8, &n8, prepared.v.data(), nprep, &status);
-		if (icu_failed(status)) {
+		if (status = detail::to_utf8(prepared, out); icu_failed(status)) {
 			wipe_string(out);
 			return icu_failure(name, status);
 		}

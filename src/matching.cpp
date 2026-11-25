@@ -10,7 +10,6 @@
 
 #include <unicode/umachine.h>
 #include <unicode/usprep.h>
-#include <unicode/ustring.h>
 #include <unicode/utypes.h>
 
 #include <algorithm>
@@ -166,16 +165,10 @@ namespace {
 
 	// ------------------------------------------------------------ steps 2.2 - 2.5 (ICU)
 
-	struct usprep_closer
-	{
-		void operator()(UStringPrepProfile *p) const noexcept { usprep_close(p); }
-	};
-	using profile_ptr = std::unique_ptr<UStringPrepProfile, usprep_closer>;
-
-	auto open_profile(UStringPrepProfileType type) noexcept -> profile_ptr
+	auto open_profile(UStringPrepProfileType type) noexcept -> detail::usprep_ptr
 	{
 		UErrorCode status = U_ZERO_ERROR;
-		profile_ptr p(usprep_openByType(type, &status));
+		detail::usprep_ptr p(usprep_openByType(type, &status));
 		if (detail::icu_failed(status)) {
 			return nullptr;
 		}
@@ -186,8 +179,8 @@ namespace {
 	// cannot load its data.
 	auto ldap_profile(bool case_fold) noexcept -> const UStringPrepProfile *
 	{
-		static const profile_ptr exact = open_profile(USPREP_RFC4518_LDAP);
-		static const profile_ptr folded = open_profile(USPREP_RFC4518_LDAP_CI);
+		static const detail::usprep_ptr exact = open_profile(USPREP_RFC4518_LDAP);
+		static const detail::usprep_ptr folded = open_profile(USPREP_RFC4518_LDAP_CI);
 		return case_fold ? folded.get() : exact.get();
 	}
 
@@ -237,20 +230,12 @@ namespace {
 	// checked, into `out` (UTF-8).
 	auto map_normalize_prohibit(std::string_view in, bool case_fold, std::string &out) -> prep_status
 	{
-		// 2.1 Transcode: UTF-8 -> UTF-16. u_strFromUTF8 refuses ill-formed
-		// UTF-8 (overlong forms, surrogates, above U+10FFFF, truncated).
-		UErrorCode status = U_ZERO_ERROR;
-		int32_t n16 = 0;
-		u_strFromUTF8(nullptr, 0, &n16, in.data(), static_cast<int32_t>(in.size()), &status);
-		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND) {
+		// 2.1 Transcode: UTF-8 -> UTF-16.
+		std::vector<UChar> utf16;
+		UErrorCode status = detail::to_utf16(in, utf16);
+		if (detail::is_invalid_utf8(status)) {
 			return prep_status::invalid_utf8;
 		}
-		if (status != U_BUFFER_OVERFLOW_ERROR && detail::icu_failed(status)) {
-			return icu_status(status);
-		}
-		std::vector<UChar> utf16(static_cast<std::size_t>(n16));
-		status = U_ZERO_ERROR;
-		u_strFromUTF8(utf16.data(), n16, &n16, in.data(), static_cast<int32_t>(in.size()), &status);
 		if (detail::icu_failed(status)) {
 			return icu_status(status);
 		}
@@ -261,30 +246,16 @@ namespace {
 		if (profile == nullptr) {
 			return prep_status::icu;
 		}
-		const auto prepare = [&](UChar *dest, int32_t capacity) {
-			UParseError where{};
-			status = U_ZERO_ERROR;
-			return usprep_prepare(profile, utf16.data(), n16, dest, capacity, USPREP_DEFAULT, &where, &status);
-		};
-		int32_t nprep = prepare(nullptr, 0);
-		switch (status) {
-		case U_BUFFER_OVERFLOW_ERROR:
-		case U_STRING_NOT_TERMINATED_WARNING:
-		case U_ZERO_ERROR:
-			break;
-		case U_STRINGPREP_PROHIBITED_ERROR:
+		std::vector<UChar> prepared;
+		status = detail::stringprep(profile, USPREP_DEFAULT, utf16, prepared);
+		if (status == U_STRINGPREP_PROHIBITED_ERROR) {
 			return prep_status::prohibited;
-		case U_STRINGPREP_UNASSIGNED_ERROR:
-			return prep_status::unassigned;
-		default:
-			return icu_status(status);
 		}
-		std::vector<UChar> prepared(static_cast<std::size_t>(nprep));
-		if (nprep > 0) {
-			nprep = prepare(prepared.data(), nprep);
-			if (detail::icu_failed(status)) {
-				return icu_status(status);
-			}
+		if (status == U_STRINGPREP_UNASSIGNED_ERROR) {
+			return prep_status::unassigned;
+		}
+		if (detail::icu_failed(status)) {
+			return icu_status(status);
 		}
 		// 2.4: RFC 4518 also prohibits U+FFFD, which ICU's profiles let through.
 		if (std::ranges::contains(prepared, replacement_character)) {
@@ -292,15 +263,7 @@ namespace {
 		}
 
 		// UTF-16 -> UTF-8.
-		status = U_ZERO_ERROR;
-		int32_t n8 = 0;
-		u_strToUTF8(nullptr, 0, &n8, prepared.data(), nprep, &status);
-		if (status != U_BUFFER_OVERFLOW_ERROR && detail::icu_failed(status)) {
-			return icu_status(status);
-		}
-		out.resize(static_cast<std::size_t>(n8));
-		status = U_ZERO_ERROR;
-		u_strToUTF8(out.data(), n8, &n8, prepared.data(), nprep, &status);
+		status = detail::to_utf8(prepared, out);
 		if (detail::icu_failed(status)) {
 			return icu_status(status);
 		}
