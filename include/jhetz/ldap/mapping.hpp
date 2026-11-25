@@ -395,6 +395,30 @@ namespace detail {
 		  "ldap: this member is not listed in ldap::schema<T>");
 		return std::get<i>(schema<C>.fields);
 	}
+
+	enum class field_set : std::uint8_t { all, writable };
+
+	// Calls fn(f) -> std::optional<error> on each field f of schema<T> (but
+	// read_only ones for field_set::writable) until one returns an error.
+	template<class T, field_set Set = field_set::all, class Fn> auto for_each_field(Fn fn) -> std::optional<error>
+	{
+		std::optional<error> failed;
+		std::apply(
+		  [&](const auto &...f) {
+			  (
+				[&] {
+					using F = std::remove_cvref_t<decltype(f)>;
+					if constexpr (Set == field_set::all || !field_of<F::ptr>().read_only) {
+						if (!failed) {
+							failed = fn(f);
+						}
+					}
+				}(),
+				...);
+		  },
+		  schema<T>.fields);
+		return failed;
+	}
 }// namespace detail
 
 // The attribute names of T's descriptor, in order.
@@ -504,29 +528,18 @@ namespace detail {
 template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 {
 	T out{};
-	std::optional<error> failed;
-	std::apply(
-	  [&](const auto &...f) {
-		  (
-			[&] {
-				if (failed) {
-					return;
-				}
-				if (auto ranged = detail::ranged_values_error(e, f.name)) {
-					failed = detail::with_context(std::move(*ranged), detail::entry_context(e.dn, f.name));
-					return;
-				}
-				auto v =
-				  detail::decode_field<std::remove_cvref_t<decltype(f)>>(detail::values_or_empty(e.find(f.name)));
-				if (!v) {
-					failed = detail::with_context(std::move(v.error()), detail::entry_context(e.dn, f.name));
-					return;
-				}
-				out.*std::remove_cvref_t<decltype(f)>::ptr = std::move(*v);
-			}(),
-			...);
-	  },
-	  schema<T>.fields);
+	auto failed = detail::for_each_field<T>([&](const auto &f) -> std::optional<error> {
+		using F = std::remove_cvref_t<decltype(f)>;
+		if (auto ranged = detail::ranged_values_error(e, f.name)) {
+			return detail::with_context(std::move(*ranged), detail::entry_context(e.dn, f.name));
+		}
+		auto v = detail::decode_field<F>(detail::values_or_empty(e.find(f.name)));
+		if (!v) {
+			return detail::with_context(std::move(v.error()), detail::entry_context(e.dn, f.name));
+		}
+		out.*F::ptr = std::move(*v);
+		return std::nullopt;
+	});
 	if (failed) {
 		return std::unexpected(std::move(*failed));
 	}
@@ -534,49 +547,43 @@ template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 }
 
 namespace detail {
-	// Appends the encoded `v` to `values`; false, with `failed` set, if it does
-	// not encode.
+	// Appends the encoded `v` to `values`; the error if it does not encode.
 	template<class E>
-	auto append_encoded(const E &v,
-	  std::string_view name,
-	  std::pmr::vector<std::pmr::string> &values,
-	  std::optional<error> &failed) -> bool
+	auto append_encoded(const E &v, std::string_view name, std::pmr::vector<std::pmr::string> &values)
+	  -> std::optional<error>
 	{
 		auto s = encode_value(v);
 		if (!s) {
-			failed = with_context(std::move(s.error()), std::string("attribute ").append(name));
-			return false;
+			return with_context(std::move(s.error()), std::string("attribute ").append(name));
 		}
 		values.emplace_back(*s);
-		return true;
+		return std::nullopt;
 	}
 
 	template<class F>
-	void encode_field(const F &f,
-	  const typename F::member &m,
-	  std::pmr::vector<partial_attribute> &out,
-	  std::optional<error> &failed)
+	auto encode_field(const F &f, const typename F::member &m, std::pmr::vector<partial_attribute> &out)
+	  -> std::optional<error>
 	{
-		if (failed || f.read_only) {
-			return;
-		}
 		partial_attribute a(f.name, {}, out.get_allocator());
 		if constexpr (F::kind == cardinality::multiple) {
 			for (const auto &v : m) {
-				if (!append_encoded(v, f.name, a.values, failed)) {
-					return;
+				if (auto failed = append_encoded(v, f.name, a.values)) {
+					return failed;
 				}
 			}
 		} else if constexpr (F::kind == cardinality::optional) {
-			if (m && !append_encoded(*m, f.name, a.values, failed)) {
-				return;
+			if (m) {
+				if (auto failed = append_encoded(*m, f.name, a.values)) {
+					return failed;
+				}
 			}
-		} else if (!append_encoded(m, f.name, a.values, failed)) {
-			return;
+		} else if (auto failed = append_encoded(m, f.name, a.values)) {
+			return failed;
 		}
 		if (!a.values.empty()) {
 			out.push_back(std::move(a));
 		}
+		return std::nullopt;
 	}
 }// namespace detail
 
@@ -599,12 +606,8 @@ template<described T>
 		}
 		out.push_back(std::move(oc));
 	}
-	std::optional<error> failed;
-	std::apply(
-	  [&](const auto &...f) {
-		  (detail::encode_field(f, value.*std::remove_cvref_t<decltype(f)>::ptr, out, failed), ...);
-	  },
-	  d.fields);
+	auto failed = detail::for_each_field<T, detail::field_set::writable>(
+	  [&](const auto &f) { return detail::encode_field(f, value.*std::remove_cvref_t<decltype(f)>::ptr, out); });
 	if (failed) {
 		return std::unexpected(std::move(*failed));
 	}
@@ -718,24 +721,21 @@ namespace detail {
 	auto values_not_in(const string_list &values, const string_list &other) -> string_list;
 
 	// Appends the changes turning member `Ptr` of `before` into that of `after`
-	// to `out`; false, with `failed` set, if a value does not encode.
+	// to `out`; the error if a value does not encode.
 	template<auto Ptr>
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): before, then after, as diff
-	auto append_diff(const owner_of<Ptr> &before,
-	  const owner_of<Ptr> &after,
-	  std::vector<change<owner_of<Ptr>>> &out,
-	  std::optional<error> &failed) -> bool
+	auto append_diff(const owner_of<Ptr> &before, const owner_of<Ptr> &after, std::vector<change<owner_of<Ptr>>> &out)
+	  -> std::optional<error>
 	{
 		using F = std::remove_cvref_t<decltype(field_of<Ptr>())>;
 		auto from = encode_values<Ptr>(before.*Ptr);
 		auto to = encode_values<Ptr>(after.*Ptr);
 		if (!from || !to) {
-			failed = with_context(
+			return with_context(
 			  std::move(!from ? from.error() : to.error()), std::string("attribute ").append(field_of<Ptr>().name));
-			return false;
 		}
 		if (*from == *to) {
-			return true;
+			return std::nullopt;
 		}
 		if constexpr (F::kind == cardinality::multiple) {
 			auto removed = values_not_in(*from, *to);
@@ -757,7 +757,7 @@ namespace detail {
 		} else {
 			out.push_back(make_change<Ptr>(modify_operation::replace, std::move(*to)));
 		}
-		return true;
+		return std::nullopt;
 	}
 }// namespace detail
 
@@ -766,21 +766,9 @@ namespace detail {
 template<described T> [[nodiscard]] auto diff(const T &original, const T &changed) -> result<std::vector<change<T>>>
 {
 	std::vector<change<T>> out;
-	std::optional<error> failed;
-	std::apply(
-	  [&](const auto &...f) {
-		  (
-			[&] {
-				[[maybe_unused]] constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
-				if constexpr (!detail::field_of<ptr>().read_only) {
-					return failed.has_value() || detail::append_diff<ptr>(original, changed, out, failed);
-				} else {
-					return true;
-				}
-			}(),
-			...);
-	  },
-	  schema<T>.fields);
+	auto failed = detail::for_each_field<T, detail::field_set::writable>([&](const auto &f) {
+		return detail::append_diff<std::remove_cvref_t<decltype(f)>::ptr>(original, changed, out);
+	});
 	if (failed) {
 		return std::unexpected(std::move(*failed));
 	}
@@ -854,21 +842,19 @@ template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 namespace detail {
 	inline void and_into(filter &out, filter f) { out = out.empty() ? std::move(f) : std::move(out) && std::move(f); }
 
-	// ANDs (a=v) for each value of member `Ptr` of `original` into `out`; false,
-	// with `failed` set, if a value does not encode.
-	template<auto Ptr>
-	auto append_unchanged(const owner_of<Ptr> &original, filter &out, std::optional<error> &failed) -> bool
+	// ANDs (a=v) for each value of member `Ptr` of `original` into `out`; the
+	// error if a value does not encode.
+	template<auto Ptr> auto append_unchanged(const owner_of<Ptr> &original, filter &out) -> std::optional<error>
 	{
 		const filters::attr a(field_of<Ptr>().name);
 		auto values = encode_values<Ptr>(original.*Ptr);
 		if (!values) {
-			failed = with_context(std::move(values.error()), std::string("attribute ").append(field_of<Ptr>().name));
-			return false;
+			return with_context(std::move(values.error()), std::string("attribute ").append(field_of<Ptr>().name));
 		}
 		for (const auto &v : *values) {
 			and_into(out, a == v);
 		}
-		return true;
+		return std::nullopt;
 	}
 }// namespace detail
 
@@ -879,21 +865,8 @@ template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> 
 	static_assert(std::apply([](const auto &...f) { return (!f.read_only || ...); }, schema<T>.fields),
 	  "ldap::unchanged_filter: every member is read_only");
 	filter out;
-	std::optional<error> failed;
-	std::apply(
-	  [&](const auto &...f) {
-		  (
-			[&] {
-				[[maybe_unused]] constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
-				if constexpr (!detail::field_of<ptr>().read_only) {
-					return failed.has_value() || detail::append_unchanged<ptr>(original, out, failed);
-				} else {
-					return true;
-				}
-			}(),
-			...);
-	  },
-	  schema<T>.fields);
+	auto failed = detail::for_each_field<T, detail::field_set::writable>(
+	  [&](const auto &f) { return detail::append_unchanged<std::remove_cvref_t<decltype(f)>::ptr>(original, out); });
 	if (failed) {
 		return std::unexpected(std::move(*failed));
 	}
