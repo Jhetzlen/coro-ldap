@@ -511,7 +511,6 @@ namespace detail {
 		}
 	}
 
-	auto entry_context(std::string_view dn) -> std::string;
 	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string;
 
 	// The error for an attribute of `e` that is `name` with a range option, if

@@ -11,7 +11,7 @@ namespace jhetz::ldap {
 
 namespace {
 
-	// `where` is the server's text: quoted sanitized, as a DN in entry_context.
+	// `where` is the server's text: quoted sanitized, as a DN in op_context.
 	auto quoted(std::string text, std::string_view where) -> std::string
 	{
 		detail::append_sanitized(text, where, 256);

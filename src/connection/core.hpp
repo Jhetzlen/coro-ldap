@@ -104,6 +104,12 @@ namespace detail {
 		return make_error(client_errc::not_connected, context);
 	}
 
+	// A task that completes with `e`.
+	template<class T> auto failed_task(error e) -> boost::capy::task<result<T>>
+	{
+		co_return std::unexpected(std::move(e));
+	}
+
 }// namespace detail
 
 // ---------------------------------------------------------------- state

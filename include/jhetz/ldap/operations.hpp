@@ -295,6 +295,8 @@ struct end_transaction_result
 namespace detail {
 	// "search ou=people,dc=example,dc=org"; the DN sanitized and cut at 256 bytes.
 	[[nodiscard]] auto op_context(std::string_view op, const dn &d) -> std::string;
+	// The same with the DN's text, e.g. the server's.
+	[[nodiscard]] auto op_context(std::string_view op, std::string_view dn) -> std::string;
 }// namespace detail
 
 }// namespace jhetz::ldap

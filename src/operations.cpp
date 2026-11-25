@@ -52,13 +52,15 @@ auto end_transaction_result::find_update_controls(std::int32_t message_id) const
 
 namespace jhetz::ldap {
 
-auto detail::op_context(std::string_view op, const dn &d) -> std::string
+auto detail::op_context(std::string_view op, const dn &d) -> std::string { return op_context(op, d.to_string()); }
+
+auto detail::op_context(std::string_view op, std::string_view dn) -> std::string
 {
-	if (d.empty()) {
+	if (dn.empty()) {
 		return detail::format("{} \"\"", op);
 	}
 	std::string text = detail::format("{} ", op);
-	detail::append_sanitized(text, d.to_string(), 256);// as mapping's entry_context
+	detail::append_sanitized(text, dn, 256);
 	return text;
 }
 

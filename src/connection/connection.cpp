@@ -213,19 +213,13 @@ auto connect(corosio::io_context &ioc, url u, connection_options options, std::p
 	co_return std::move(c);
 }
 
-namespace {
-
-	auto connect_failed(error e) -> capy::task<result<connection>> { co_return std::unexpected(std::move(e)); }
-
-}// namespace
-
 auto connect(corosio::io_context &ioc, std::string_view text, connection_options options, std::pmr::memory_resource *mr)
   -> capy::task<result<connection>>
 {
 	// Not a coroutine: `text` is parsed now.
 	auto u = url::parse(text, mr);
 	if (!u) {
-		return connect_failed(std::move(u.error()));
+		return detail::failed_task<connection>(std::move(u.error()));
 	}
 	return connect(ioc, std::move(*u), std::move(options), mr);
 }

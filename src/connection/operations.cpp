@@ -275,16 +275,10 @@ namespace detail {
 
 using detail::extended_impl;
 
-namespace {
-
-	auto refuse_extended(error e) -> capy::task<result<extended_result>> { co_return std::unexpected(std::move(e)); }
-
-}// namespace
-
 auto connection::extended(extended_params request) -> capy::task<result<extended_result>>
 {
 	if (!core_) {
-		return refuse_extended(no_connection("extended operation " + request.name));
+		return detail::failed_task<extended_result>(no_connection("extended operation " + request.name));
 	}
 	const core_ref self(core_);
 	return detail::on_strand(self, extended_impl(self, std::move(request)));

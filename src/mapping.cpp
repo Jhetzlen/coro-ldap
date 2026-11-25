@@ -1,6 +1,7 @@
 #include "jhetz/ldap/mapping.hpp"
 
 #include "jhetz/ldap/ad/range.hpp"
+#include "jhetz/ldap/operations.hpp"
 
 #include "format_util.hpp"
 #include "generalized_time.hpp"
@@ -93,7 +94,7 @@ namespace detail {
 				std::string text = "attribute ";
 				detail::append_sanitized(text, description, 128);
 				text += " returned for no member";
-				return with_context(make_error(client_errc::schema_mismatch, text), entry_context(e.dn));
+				return with_context(make_error(client_errc::schema_mismatch, text), op_context("entry", e.dn));
 			}
 		}
 		return std::nullopt;
@@ -120,23 +121,11 @@ namespace detail {
 		return detail::format("{} {}", name, attribute);
 	}
 
-	auto entry_context(std::string_view dn) -> std::string
-	{
-		// The DN is the server's text.
-		std::string text = "entry ";
-		if (dn.empty()) {
-			text += "\"\"";
-		} else {
-			detail::append_sanitized(text, dn, 256);
-		}
-		return text;
-	}
-
 	// A swap only garbles the context of a diagnostic; one caller (mapping.hpp).
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string
 	{
-		std::string text = entry_context(dn);
+		std::string text = op_context("entry", dn);
 		detail::format_to(text, ": attribute {}", attribute);
 		return text;
 	}

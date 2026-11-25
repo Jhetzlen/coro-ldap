@@ -1472,48 +1472,38 @@ auto client::executor() const noexcept -> executor_type { return state_->strand;
 
 namespace {
 
-	template<class Lease> auto acquire_refused() -> capy::task<result<Lease>>
+	auto moved_from(std::string_view context) -> error
 	{
-		co_return fail(client_errc::not_connected, "acquire: client moved from");
+		return make_error(client_errc::not_connected, std::string(context) + ": client moved from");
+	}
+
+	// Not a coroutine: the task holds its own copy of the state.
+	template<class Lease>
+	auto acquire_from(const std::shared_ptr<detail::client_state> &state) -> capy::task<result<Lease>>
+	{
+		if (state == nullptr) {
+			return detail::failed_task<Lease>(moved_from("acquire"));
+		}
+		return detail::on_strand(state->strand, detail::acquire_lease<Lease>(state));
 	}
 
 }// namespace
 
-// Not coroutines: the tasks hold their own copy of the state, never `this`.
-auto client::acquire() -> capy::task<result<lease>>
-{
-	if (state_ == nullptr) {
-		return acquire_refused<lease>();
-	}
-	return detail::on_strand(state_->strand, detail::acquire_lease<lease>(state_));
-}
+auto client::acquire() -> capy::task<result<lease>> { return acquire_from<lease>(state_); }
 
 auto client::acquire_exclusive() -> capy::task<result<exclusive_lease>>
 {
-	if (state_ == nullptr) {
-		return acquire_refused<exclusive_lease>();
-	}
-	return detail::on_strand(state_->strand, detail::acquire_lease<exclusive_lease>(state_));
+	return acquire_from<exclusive_lease>(state_);
 }
 
 namespace {
-
-	template<class T> auto read_refused(std::string context) -> capy::task<result<T>>
-	{
-		co_return fail(client_errc::not_connected, context + ": client moved from");
-	}
-
-	template<class T> auto arguments_refused(error e) -> capy::task<result<T>>
-	{
-		co_return std::unexpected(std::move(e));
-	}
 
 	// Not a coroutine: the task holds its own copy of the state.
 	template<class Params>
 	auto update(const std::shared_ptr<detail::client_state> &state, Params request) -> capy::task<result<response>>
 	{
 		if (state == nullptr) {
-			return read_refused<response>(detail::update_context(request));
+			return detail::failed_task<response>(moved_from(detail::update_context(request)));
 		}
 		return detail::on_strand(
 		  state->strand, detail::forward_write(state, [request = std::move(request)](const lease &held) {
@@ -1527,7 +1517,7 @@ namespace {
 auto client::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 {
 	if (state_ == nullptr) {
-		return read_refused<search_result>(detail::op_context("search", request.base));
+		return detail::failed_task<search_result>(moved_from(detail::op_context("search", request.base)));
 	}
 	if (state_->chases(request)) {
 		return detail::on_strand(state_->strand, detail::chasing_search(state_, std::move(request), mr));
@@ -1541,7 +1531,7 @@ auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::search_stream>>
 {
 	if (state_ == nullptr) {
-		return read_refused<ldap::search_stream>(detail::op_context("search", request.base));
+		return detail::failed_task<ldap::search_stream>(moved_from(detail::op_context("search", request.base)));
 	}
 	return detail::on_strand(state_->strand,
 	  detail::forward_stream<ldap::search_stream>(
@@ -1556,10 +1546,10 @@ auto search_paged_stream(client &c,
   std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
 {
 	if (auto bad = detail::invalid_paged_arguments(request, page_size, max_pages)) {
-		return arguments_refused<ldap::paged_search>(std::move(*bad));
+		return detail::failed_task<ldap::paged_search>(std::move(*bad));
 	}
 	if (c.state_ == nullptr) {
-		return read_refused<ldap::paged_search>(detail::op_context("search", request.base));
+		return detail::failed_task<ldap::paged_search>(moved_from(detail::op_context("search", request.base)));
 	}
 	return detail::on_strand(c.state_->strand,
 	  detail::forward_stream<ldap::paged_search>(
@@ -1571,7 +1561,7 @@ auto search_paged_stream(client &c,
 auto client::compare(compare_params request) -> capy::task<result<compare_result>>
 {
 	if (state_ == nullptr) {
-		return read_refused<compare_result>(detail::op_context("compare", request.entry));
+		return detail::failed_task<compare_result>(moved_from(detail::op_context("compare", request.entry)));
 	}
 	if (state_->chases(request)) {
 		return detail::on_strand(state_->strand, detail::chasing_compare(state_, std::move(request)));
@@ -1598,7 +1588,7 @@ auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 auto client::extended(extended_params request) -> capy::task<result<extended_result>>
 {
 	if (state_ == nullptr) {
-		return read_refused<extended_result>("extended operation " + request.name);
+		return detail::failed_task<extended_result>(moved_from("extended operation " + request.name));
 	}
 	return detail::on_strand(state_->strand,
 	  detail::forward_write<extended_result>(
