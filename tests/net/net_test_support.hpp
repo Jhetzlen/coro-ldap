@@ -317,9 +317,9 @@ inline auto bind_request_msg(std::int32_t id, std::string_view name = "cn=admin,
 	return message{ id, bind_request{ 3, name, simple_auth{ "secret" } } };
 }
 
-inline auto bind_response_msg(std::int32_t id, std::string_view diagnostic = {}) -> message
+inline auto bind_resp(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {}) -> message
 {
-	return message{ id, bind_response{ { 0, "", diagnostic } } };
+	return message{ id, bind_response{ ldap_result{ code, "", diagnostic } } };
 }
 
 inline auto bytes_of(const message &m) -> std::string

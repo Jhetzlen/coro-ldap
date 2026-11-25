@@ -166,10 +166,10 @@ struct mock
 TEST_CASE("read_message: one PDU per read", "[net][read_message]")
 {
 	mock m;
-	m.peer->provide(bytes_of(bind_response_msg(1, "hello")));
+	m.peer->provide(bytes_of(bind_resp(1, 0, "hello")));
 	auto r = m.read();
 	REQUIRE(r.has_value());
-	CHECK(*r == bind_response_msg(1, "hello"));
+	CHECK(*r == bind_resp(1, 0, "hello"));
 	CHECK(m.buf.empty());
 	REQUIRE(m.reads->size() == 1);
 	CHECK(m.reads->front() >= net::read_buffer::min_read);// one large read, not per byte
@@ -182,7 +182,7 @@ TEST_CASE("read_message: PDUs split across arbitrary read boundaries", "[net][re
 	std::vector<ldap::message> sent;
 	std::string wire;
 	for (int i = 1; i <= 5; ++i) {
-		sent.push_back(bind_response_msg(i, std::string(static_cast<std::size_t>(i) * 150, 'x')));
+		sent.push_back(bind_resp(i, 0, std::string(static_cast<std::size_t>(i) * 150, 'x')));
 		wire += bytes_of(sent.back());
 	}
 	m.peer->provide(wire);
@@ -204,9 +204,9 @@ TEST_CASE("read_message: PDUs split across arbitrary read boundaries", "[net][re
 TEST_CASE("read_message: several PDUs in one read are kept for later calls", "[net][read_message]")
 {
 	mock m;
-	const auto a = bind_response_msg(1);
-	const auto b = bind_response_msg(2, "two");
-	const auto c = bind_response_msg(3, "three");
+	const auto a = bind_resp(1);
+	const auto b = bind_resp(2, 0, "two");
+	const auto c = bind_resp(3, 0, "three");
 	m.peer->provide(bytes_of(a) + bytes_of(b) + bytes_of(c));
 	auto ra = m.read();
 	REQUIRE(ra.has_value());
@@ -225,8 +225,8 @@ TEST_CASE("read_message: several PDUs in one read are kept for later calls", "[n
 TEST_CASE("read_message: leftover bytes of the next PDU", "[net][read_message]")
 {
 	mock m;
-	const auto first = bind_response_msg(1);
-	const auto second = bind_response_msg(2, std::string(500, 'y'));
+	const auto first = bind_resp(1);
+	const auto second = bind_resp(2, 0, std::string(500, 'y'));
 	const auto second_bytes = bytes_of(second);
 	m.peer->provide(bytes_of(first) + second_bytes.substr(0, 100));
 	auto r1 = m.read();
@@ -265,7 +265,7 @@ TEST_CASE("read_message: oversized PDU rejected from its header", "[net][read_me
 	SECTION("at the limit is accepted")
 	{
 		mock m;
-		const auto msg = bind_response_msg(7, std::string(300, 'z'));
+		const auto msg = bind_resp(7, 0, std::string(300, 'z'));
 		const auto wire = bytes_of(msg);
 		m.peer->provide(wire);
 		auto r = m.read({ .max_message_size = wire.size() });
@@ -295,7 +295,7 @@ TEST_CASE("read_message: end of stream", "[net][read_message]")
 	SECTION("between PDUs")
 	{
 		mock m;
-		m.peer->provide(bytes_of(bind_response_msg(1)));
+		m.peer->provide(bytes_of(bind_resp(1)));
 		m.peer->close();
 		REQUIRE(m.read().has_value());
 		auto r = m.read();
@@ -306,7 +306,7 @@ TEST_CASE("read_message: end of stream", "[net][read_message]")
 	SECTION("in the middle of a PDU")
 	{
 		mock m(3);
-		const auto wire = bytes_of(bind_response_msg(1, "abcdef"));
+		const auto wire = bytes_of(bind_resp(1, 0, "abcdef"));
 		m.peer->provide(wire.substr(0, 10));
 		m.peer->close();
 		auto r = m.read();
@@ -330,7 +330,7 @@ TEST_CASE("read_message: end of stream", "[net][read_message]")
 TEST_CASE("read_message: request operations from the server are rejected", "[net][read_message]")
 {
 	mock m;
-	m.peer->provide(bytes_of(bind_request_msg(1)) + bytes_of(bind_response_msg(2)));
+	m.peer->provide(bytes_of(bind_request_msg(1)) + bytes_of(bind_resp(2)));
 	auto r = m.read();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == client_errc::unsupported_operation);
@@ -338,11 +338,11 @@ TEST_CASE("read_message: request operations from the server are rejected", "[net
 	// The bad PDU was consumed; the stream stays framed.
 	auto next = m.read();
 	REQUIRE(next.has_value());
-	CHECK(*next == bind_response_msg(2));
+	CHECK(*next == bind_resp(2));
 
 	// A server-side reader accepts requests and rejects responses.
 	mock s;
-	s.peer->provide(bytes_of(bind_request_msg(1)) + bytes_of(bind_response_msg(2)));
+	s.peer->provide(bytes_of(bind_request_msg(1)) + bytes_of(bind_resp(2)));
 	const ldap::testing::read_options as_server{};
 	auto req = s.read_request(as_server);
 	REQUIRE(req.has_value());
@@ -357,7 +357,7 @@ TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
 	ldap::message big{ 5,
 		ldap::search_result_entry{ "cn=big", { { "data", { std::string(3uz * 1024 * 1024, 'q') } } } } };
 	const auto wire = bytes_of(big);
-	m.peer->provide(wire + bytes_of(bind_response_msg(6)));
+	m.peer->provide(wire + bytes_of(bind_resp(6)));
 	auto r = m.read();
 	REQUIRE(r.has_value());
 	CHECK(*r == big);
@@ -367,7 +367,7 @@ TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
 	CHECK(m.reads->size() == 1 + ((wire.size() - net::read_buffer::min_read + (64uz * 1024) - 1) / (64uz * 1024)));
 	auto small = m.read();
 	REQUIRE(small.has_value());
-	CHECK(*small == bind_response_msg(6));
+	CHECK(*small == bind_resp(6));
 	CHECK(m.buf.capacity() == net::read_buffer::min_read);
 }
 
@@ -608,8 +608,8 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 		{
 			mock m(std::numeric_limits<std::size_t>::max(), &counting);
 			CHECK(m.buf.get_allocator().resource() == &counting);
-			const auto big = bind_response_msg(1, std::string(100'000, 'b'));
-			m.peer->provide(bytes_of(big) + bytes_of(bind_response_msg(2)));
+			const auto big = bind_resp(1, 0, std::string(100'000, 'b'));
+			m.peer->provide(bytes_of(big) + bytes_of(bind_resp(2)));
 			auto r = m.read();
 			REQUIRE(r.has_value());
 			CHECK(*r == big);
@@ -624,13 +624,13 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 		counting_resource counting;
 		mock m(7, &counting);
 		for (int i = 1; i <= 3; ++i) {
-			m.peer->provide(bytes_of(bind_response_msg(i, std::string(40'000, 'a'))));
+			m.peer->provide(bytes_of(bind_resp(i, 0, std::string(40'000, 'a'))));
 		}
 		for (int i = 1; i <= 3; ++i) {
 			REQUIRE(m.read().has_value());
 		}
 		CHECK(counting.allocations() == 2);// min_read, then one PDU
-		CHECK(m.buf.capacity() == bytes_of(bind_response_msg(1, std::string(40'000, 'a'))).size());
+		CHECK(m.buf.capacity() == bytes_of(bind_resp(1, 0, std::string(40'000, 'a'))).size());
 	}
 	SECTION("default resource by default")
 	{
@@ -649,7 +649,7 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 		std::pmr::monotonic_buffer_resource arena(storage.data(), storage.size(), std::pmr::null_memory_resource());
 		mock m(7, &arena);
 		for (int i = 1; i <= 3; ++i) {
-			m.peer->provide(bytes_of(bind_response_msg(i, std::string(40'000, 'a'))));
+			m.peer->provide(bytes_of(bind_resp(i, 0, std::string(40'000, 'a'))));
 		}
 		for (int i = 1; i <= 3; ++i) {
 			auto r = m.read();
@@ -662,13 +662,13 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 TEST_CASE("read_message: header errors repeat until the connection is dropped", "[net][read_message]")
 {
 	mock m;
-	m.peer->provide(std::string("\x04\x01\x00", 3) + bytes_of(bind_response_msg(1)));
+	m.peer->provide(std::string("\x04\x01\x00", 3) + bytes_of(bind_resp(1)));
 	auto first = m.read();
 	auto second = m.read();
 	REQUIRE_FALSE(first.has_value());
 	REQUIRE_FALSE(second.has_value());
 	CHECK(first.error() == second.error());// nothing consumed: the stream cannot be re-framed
-	CHECK(m.buf.size() == 3 + bytes_of(bind_response_msg(1)).size());
+	CHECK(m.buf.size() == 3 + bytes_of(bind_resp(1)).size());
 
 	mock big;
 	big.peer->provide(std::string("\x30\x84\x7f\x00\x00\x00", 6));
@@ -683,7 +683,7 @@ TEST_CASE("read_message: header errors repeat until the connection is dropped", 
 TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]")
 {
 	const std::error_code truncated = capy::error::stream_truncated;
-	const auto one = bytes_of(bind_response_msg(1));
+	const auto one = bytes_of(bind_resp(1));
 	auto run_script = [](std::vector<scripted_stream::step> steps) {
 		corosio::io_context ioc;
 		auto t = net::transport::wrap(
@@ -709,7 +709,7 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 	{
 		auto r = run_script({ { .ec = truncated, .bytes = one } });// data and the truncation in one read
 		REQUIRE(r[0].has_value());
-		CHECK(*r[0] == bind_response_msg(1));
+		CHECK(*r[0] == bind_resp(1));
 		REQUIRE_FALSE(r[1].has_value());
 	}
 	SECTION("inside a PDU: an error with the progress")

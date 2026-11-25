@@ -49,11 +49,6 @@ inline constexpr std::string_view people = "ou=people,dc=example,dc=org";
 
 // ---------------------------------------------------------------- messages
 
-inline auto bind_resp(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {}) -> ldap::message
-{
-	return ldap::message{ id, ldap::bind_response{ ldap::ldap_result{ code, "", diagnostic } } };
-}
-
 inline auto entry_msg(std::int32_t id, std::string_view dn, std::string_view cn) -> ldap::message
 {
 	return ldap::message{

@@ -1,5 +1,6 @@
 // SCRAM-SHA-256 driven directly: the RFC 7677 vector, input preparation and
 // the rejections.
+#include "../test_util.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
 #include "scram_test_access.hpp"
 
@@ -14,7 +15,6 @@
 #include <cstdint>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -23,6 +23,7 @@
 namespace ldap = jhetz::ldap;
 using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::StartsWith;
+using jhetz::ldap::test::hex;
 
 namespace {
 
@@ -155,16 +156,6 @@ TEST_CASE("scram: random client nonces", "[sasl][scram]")
 }
 
 namespace {
-
-// Bytes as hex, for INFO().
-auto hex(std::string_view s) -> std::string
-{
-	std::ostringstream out;
-	for (const char c : s) {
-		out << std::hex << (static_cast<unsigned>(static_cast<unsigned char>(c)) | 0x100u) % 0x100u << ' ';
-	}
-	return out.str();
-}
 
 // The username as start() sends it (SASLprep'ed and escaped).
 auto sent_username(std::string username) -> std::string

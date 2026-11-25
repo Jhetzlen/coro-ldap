@@ -58,10 +58,6 @@ auto str(std::string_view hex_text) -> std::string
 	return { reinterpret_cast<const char *>(b.data()), b.size() };
 }
 
-auto hex_of(std::string_view s) -> std::string { return jhetz::ldap::test::hex(std::as_bytes(std::span(s))); }
-
-auto hex_of(const detail::ntlm_key &k) -> std::string { return jhetz::ldap::test::hex(std::as_bytes(std::span(k))); }
-
 auto key_str(std::span<const unsigned char> k) -> std::string
 {
 	return { reinterpret_cast<const char *>(k.data()), k.size() };
@@ -186,14 +182,14 @@ auto dc_verify(std::string_view negotiate,
 	const std::string temp = nt.substr(16);
 	auto proof = hmac_md5(*key, key_str(spec_server_challenge) + temp);
 	REQUIRE(proof.has_value());
-	CHECK(hex_of(nt.substr(0, 16)) == hex_of(*proof));
+	CHECK(hex(nt.substr(0, 16)) == hex(*proof));
 	auto session = hmac_md5(*key, key_str(*proof));
 	REQUIRE(session.has_value());
 	std::string zeroed(authenticate);
 	zeroed.replace(detail::ntlm_authenticate_mic_offset, 16, 16, '\0');
 	auto mic = hmac_md5(*session, std::string(negotiate) + std::string(challenge) + zeroed);
 	REQUIRE(mic.has_value());
-	CHECK(hex_of(auth->mic) == hex_of(*mic));
+	CHECK(hex(auth->mic) == hex(*mic));
 	// temp: 01 01 Z(6) Time ClientChallenge Z(4) ServerName Z(4).
 	CHECK(temp.substr(0, 8) == std::string("\x01\x01\0\0\0\0\0\0", 8));
 	CHECK(temp.substr(temp.size() - 4) == std::string(4, '\0'));
@@ -239,7 +235,7 @@ TEST_CASE("ntlm: the NTLMv2 test vectors of MS-NLMP section 4.2.4", "[sasl][ntlm
 	// 4.2.4.1.1 NTOWFv2() and LMOWFv2().
 	auto key = ntowfv2("Password", "User", "Domain");
 	REQUIRE(key.has_value());
-	CHECK(hex_of(*key) == "0C 86 8A 40 3B FD 7A 93 A3 00 1E F2 2E F0 2E 3F");
+	CHECK(hex(*key) == "0C 86 8A 40 3B FD 7A 93 A3 00 1E F2 2E F0 2E 3F");
 	// The user name is uppercased, the domain is not.
 	CHECK(ntowfv2("Password", "USER", "Domain") == key);
 	CHECK(ntowfv2("Password", "User", "DOMAIN") != key);
@@ -248,15 +244,14 @@ TEST_CASE("ntlm: the NTLMv2 test vectors of MS-NLMP section 4.2.4", "[sasl][ntlm
 	auto r = compute_response(*key, server_name, false);
 	REQUIRE(r.has_value());
 	// 4.2.4.2.2 NTLMv2 Response: the NTProofStr, then temp.
-	CHECK(hex_of(r->nt_challenge_response.substr(0, 16)) == "68 CD 0A B8 51 E5 1C 96 AA BC 92 7B EB EF 6A 1C");
-	CHECK(hex_of(r->nt_challenge_response.substr(16))
-		  == hex_of(std::string("\x01\x01", 2) + std::string(14, '\0') + std::string(8, '\xAA') + std::string(4, '\0')
-					+ server_name + std::string(4, '\0')));
+	CHECK(hex(r->nt_challenge_response.substr(0, 16)) == "68 CD 0A B8 51 E5 1C 96 AA BC 92 7B EB EF 6A 1C");
+	CHECK(hex(r->nt_challenge_response.substr(16))
+		  == hex(std::string("\x01\x01", 2) + std::string(14, '\0') + std::string(8, '\xAA') + std::string(4, '\0')
+				 + server_name + std::string(4, '\0')));
 	// 4.2.4.1.2 Session Base Key.
-	CHECK(hex_of(r->session_base_key) == "8D E4 0C CA DB C1 4A 82 F1 5C B0 AD 0D E9 5C A3");
+	CHECK(hex(r->session_base_key) == "8D E4 0C CA DB C1 4A 82 F1 5C B0 AD 0D E9 5C A3");
 	// 4.2.4.2.1 LMv2 Response.
-	CHECK(
-	  hex_of(r->lm_challenge_response) == "86 C3 50 97 AC 9C EC 10 25 54 76 4A 57 CC CC 19 AA AA AA AA AA AA AA AA");
+	CHECK(hex(r->lm_challenge_response) == "86 C3 50 97 AC 9C EC 10 25 54 76 4A 57 CC CC 19 AA AA AA AA AA AA AA AA");
 
 	// With the server's MsvAvTimestamp the LmChallengeResponse is Z(24).
 	auto with_time = compute_response(*key, server_name, true);
@@ -271,7 +266,7 @@ TEST_CASE("ntlm: the channel bindings hash", "[sasl][ntlm]")
 	const std::string app = ldap::prefixed_channel_binding(ldap::channel_binding_type::tls_server_end_point, h);
 	auto cb = detail::ntlm_channel_bindings_hash(app);
 	REQUIRE(cb.has_value());
-	CHECK(hex_of(*cb) == expected_bindings_hash);
+	CHECK(hex(*cb) == expected_bindings_hash);
 }
 
 TEST_CASE("ntlm: an NTLMv2 bind checked by the server", "[net][sasl][ntlm]")
@@ -288,7 +283,7 @@ TEST_CASE("ntlm: an NTLMv2 bind checked by the server", "[net][sasl][ntlm]")
 	m.check_server();
 	REQUIRE(m.log.received.size() == 2);
 	const std::string negotiate = sasl_creds(m.log.received[0]);
-	CHECK(hex_of(negotiate) == hex_of(expected_negotiate));
+	CHECK(hex(negotiate) == hex(expected_negotiate));
 	const std::string authenticate = sasl_creds(m.log.received[1]);
 
 	auto auth = ldap::testing::parse_ntlm_authenticate(authenticate);
@@ -308,7 +303,7 @@ TEST_CASE("ntlm: an NTLMv2 bind checked by the server", "[net][sasl][ntlm]")
 	expected.push_back(mic_flags());
 	expected.push_back(bindings_pair(std::string(16, '\0')));// Z(16): no TLS
 	expected.push_back(target_pair("ldap/dc1.example.org"));
-	CHECK(hex_of(info) == hex_of(detail::encode_ntlm_av_pairs(expected)));
+	CHECK(hex(info) == hex(detail::encode_ntlm_av_pairs(expected)));
 	// The server's timestamp and the client challenge.
 	const std::string temp = auth->nt_challenge_response.substr(16);
 	CHECK(temp.substr(8, 8) == timestamp_pair(server_time).value);
@@ -370,7 +365,7 @@ TEST_CASE("ntlm: user names, domains and random client challenges", "[net][sasl]
 		expected.push_back(timestamp_pair(server_time));
 		expected.push_back(mic_flags());
 		expected.push_back(bindings_pair(std::string(16, '\0')));
-		CHECK(hex_of(info) == hex_of(detail::encode_ntlm_av_pairs(expected)));
+		CHECK(hex(info) == hex(detail::encode_ntlm_av_pairs(expected)));
 	}
 	SECTION("without the server's MsvAvTimestamp: the current time and the LMv2 response")
 	{
@@ -437,7 +432,7 @@ TEST_CASE("ntlm: a golden AUTHENTICATE_MESSAGE from an independent implementatio
 	  "c9cab8dc3bf866da9aba57a7090028006c006400610070002f006400630031002e006500780061006d0070006c006500"
 	  "2e006f00720067000000000000000000");
 	// The same CHALLENGE as the other tests build.
-	CHECK(hex_of(dc_challenge()) == hex_of(challenge));
+	CHECK(hex(dc_challenge()) == hex(challenge));
 
 	const auto hash = cert_hash();
 	auto mech = detail::ntlm_test_access::with_challenge(
@@ -448,11 +443,11 @@ TEST_CASE("ntlm: a golden AUTHENTICATE_MESSAGE from an independent implementatio
 	auto first = mech.start();
 	REQUIRE(first.has_value());
 	REQUIRE(first->has_value());
-	CHECK(hex_of(**first) == hex_of(negotiate));
+	CHECK(hex(**first) == hex(negotiate));
 	auto second = mech.step(challenge);
 	REQUIRE(second.has_value());
 	REQUIRE(second->has_value());
-	CHECK(hex_of(**second) == hex_of(authenticate));
+	CHECK(hex(**second) == hex(authenticate));
 	CHECK(mech.complete(std::nullopt).has_value());
 }
 
@@ -469,7 +464,7 @@ TEST_CASE("ntlm: channel binding over TLS", "[sasl][ntlm]")
 		auto first = mech.start();
 		REQUIRE(first.has_value());
 		REQUIRE(first->has_value());
-		CHECK(hex_of(**first) == hex_of(expected_negotiate));
+		CHECK(hex(**first) == hex(expected_negotiate));
 		auto second = mech.step(challenge);
 		REQUIRE(second.has_value());
 		REQUIRE(second->has_value());
@@ -482,13 +477,13 @@ TEST_CASE("ntlm: channel binding over TLS", "[sasl][ntlm]")
 		pairs.push_back(mic_flags());
 		pairs.push_back(bindings_pair(bindings));
 		pairs.push_back(target_pair(spn));
-		return hex_of(detail::encode_ntlm_av_pairs(pairs));
+		return hex(detail::encode_ntlm_av_pairs(pairs));
 	};
 
 	SECTION("MsvAvChannelBindings over tls-server-end-point, the default target")
 	{
 		auto mech = detail::ntlm_test_access::with_challenge("CORP\\jdoe", "secret", {}, spec_client_challenge);
-		CHECK(hex_of(exchange(mech, tls)) == with(str(expected_bindings_hash), "ldap/dc1.example.org"));
+		CHECK(hex(exchange(mech, tls)) == with(str(expected_bindings_hash), "ldap/dc1.example.org"));
 		CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
 	}
 	SECTION("ntlm_channel_binding::none: no MsvAvChannelBindings (Samba refuses an explicit Z(16) over TLS)")
@@ -498,7 +493,7 @@ TEST_CASE("ntlm: channel binding over TLS", "[sasl][ntlm]")
 		pairs.push_back(timestamp_pair(server_time));
 		pairs.push_back(mic_flags());
 		pairs.push_back(target_pair("ldap/dc1.example.org"));
-		CHECK(hex_of(exchange(mech, tls)) == hex_of(detail::encode_ntlm_av_pairs(pairs)));
+		CHECK(hex(exchange(mech, tls)) == hex(detail::encode_ntlm_av_pairs(pairs)));
 		CHECK(mech.channel_binding_used() == std::nullopt);
 	}
 	SECTION("no tls-server-end-point hash: refused before anything is sent")
@@ -837,13 +832,13 @@ TEST_CASE("ntlm: the session security vectors of MS-NLMP section 4.2.4", "[sasl]
 	const auto session_base_key = from_hex("8D E4 0C CA DB C1 4A 82 F1 5C B0 AD 0D E9 5C A3");
 	detail::ntlm_key encrypted = spec_random_session_key;
 	detail::ntlm_rc4(std::span(reinterpret_cast<const unsigned char *>(session_base_key.data()), 16)).apply(encrypted);
-	CHECK(hex_of(encrypted) == "C5 DA D2 54 4F C9 79 90 94 CE 1C E9 0B C9 D0 3E");
+	CHECK(hex(encrypted) == "C5 DA D2 54 4F C9 79 90 94 CE 1C E9 0B C9 D0 3E");
 
 	// 4.2.4.4 GSS_WrapEx: SEALKEY, SIGNKEY of the RandomSessionKey.
 	detail::ntlm_session_keys keys;
 	REQUIRE(detail::ntlm_derive_session_keys(spec_random_session_key, keys).has_value());
-	CHECK(hex_of(keys.client_sealing_key) == "59 F6 00 97 3C C4 96 0A 25 48 0A 7C 19 6E 4C 58");
-	CHECK(hex_of(keys.client_signing_key) == "47 88 DC 86 1B 47 82 F3 5D 43 FD 98 FE 1A 2D 39");
+	CHECK(hex(keys.client_sealing_key) == "59 F6 00 97 3C C4 96 0A 25 48 0A 7C 19 6E 4C 58");
+	CHECK(hex(keys.client_signing_key) == "47 88 DC 86 1B 47 82 F3 5D 43 FD 98 FE 1A 2D 39");
 	// The server-to-client keys follow the same formula (no spec vector):
 	// as the mock domain controller derives them.
 	CHECK(keys.server_signing_key == dc_subkey(spec_random_session_key, "server-to-client", "signing"));
@@ -857,7 +852,7 @@ TEST_CASE("ntlm: the session security vectors of MS-NLMP section 4.2.4", "[sasl]
 	CHECK(sealing.protection() == protection);
 	CHECK(sealing.max_received() == 1024);
 	CHECK(sealing.max_wrap_input() == 131'072 - 16);
-	CHECK(hex_of(wrap_with(sealing, plaintext))
+	CHECK(hex(wrap_with(sealing, plaintext))
 		  == "01 00 00 00 7F B3 8E C5 C5 5D 49 76 00 00 00 00 "
 			 "54 E5 01 65 BF 19 36 DC 99 60 20 C1 81 1B 0F 06 FB 5F");
 
@@ -866,7 +861,7 @@ TEST_CASE("ntlm: the session security vectors of MS-NLMP section 4.2.4", "[sasl]
 	detail::ntlm_security_layer signing(keys, protection, 1024);
 	std::string checksum = str("70 35 28 51 F2 56 43 09");
 	detail::ntlm_rc4(keys.client_sealing_key).apply(uchars(checksum));
-	CHECK(hex_of(wrap_with(signing, plaintext)) == hex_of(le32(1) + checksum + le32(0) + plaintext));
+	CHECK(hex(wrap_with(signing, plaintext)) == hex(le32(1) + checksum + le32(0) + plaintext));
 }
 
 TEST_CASE("ntlm: a golden security layer from an independent implementation", "[sasl][ntlm][rfc]")
@@ -894,7 +889,7 @@ TEST_CASE("ntlm: a golden security layer from an independent implementation", "[
 	const std::string who_am_i = str("301e02010377198017") + "1.3.6.1.4.1.4203.1.11.3";
 	const std::string unbind = str("30050201044200");
 	const std::string answer = str("3014020103780f0a0100040004008b06") + "u:jdoe";
-	CHECK(hex_of(dc_challenge(dc_flags | layer_flags)) == hex_of(challenge));
+	CHECK(hex(dc_challenge(dc_flags | layer_flags)) == hex(challenge));
 
 	// require_tls stays true: the layer stands in for it.
 	auto mech = detail::ntlm_test_access::with_challenge("CORP\\j\xC3\xB6rg",
@@ -906,23 +901,23 @@ TEST_CASE("ntlm: a golden security layer from an independent implementation", "[
 	auto first = mech.start();
 	REQUIRE(first.has_value());
 	REQUIRE(first->has_value());
-	CHECK(hex_of(**first) == hex_of(negotiate));
+	CHECK(hex(**first) == hex(negotiate));
 	CHECK(mech.take_security_layer() == nullptr);
 	auto second = mech.step(challenge);
 	REQUIRE(second.has_value());
 	REQUIRE(second->has_value());
-	CHECK(hex_of(**second) == hex_of(authenticate));
+	CHECK(hex(**second) == hex(authenticate));
 	auto layer = mech.take_security_layer();
 	REQUIRE(layer != nullptr);
 	CHECK(mech.take_security_layer() == nullptr);// once
 	CHECK(mech.complete(std::nullopt).has_value());
 	CHECK(layer->protection() == ldap::sasl_protection::confidentiality);
 	CHECK(layer->max_received() == 0x0100'0000);
-	CHECK(hex_of(wrap_with(*layer, who_am_i)) == hex_of(client0));
-	CHECK(hex_of(wrap_with(*layer, unbind)) == hex_of(client1));
+	CHECK(hex(wrap_with(*layer, who_am_i)) == hex(client0));
+	CHECK(hex(wrap_with(*layer, unbind)) == hex(client1));
 	auto plain_answer = unwrap_with(*layer, server0);
 	REQUIRE(plain_answer.has_value());
-	CHECK(hex_of(*plain_answer) == hex_of(answer));
+	CHECK(hex(*plain_answer) == hex(answer));
 
 	// A new bind starts afresh: no layer until its AUTHENTICATE_MESSAGE.
 	REQUIRE(mech.start().has_value());

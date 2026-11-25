@@ -253,15 +253,15 @@ TEST_CASE("sasl layer: outgoing PDUs are wrapped and framed", "[net][sasl][sasl_
 
 TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]")
 {
-	const auto one = bytes_of(bind_response_msg(1, "first"));
-	const auto two = bytes_of(bind_response_msg(2, "second"));
+	const auto one = bytes_of(bind_resp(1, 0, "first"));
+	const auto two = bytes_of(bind_resp(2, 0, "second"));
 
 	SECTION("two PDUs in one buffer")
 	{
 		layered_pair p;
 		p.write_raw(frame(one + two));
-		CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_response_msg(1, "first"));
-		CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_response_msg(2, "second"));
+		CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_resp(1, 0, "first"));
+		CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_resp(2, 0, "second"));
 		CHECK(p.counts->unwraps == 1);
 	}
 	SECTION("one PDU over several buffers, an empty one among them, written a byte at a time")
@@ -274,7 +274,7 @@ TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]
 			p.write_raw(std::string(1, c));
 		}
 		drive_until(p.ioc, [&read] { return read.done(); });
-		CHECK(read.get() == bind_response_msg(1, "first"));
+		CHECK(read.get() == bind_resp(1, 0, "first"));
 		CHECK(p.counts->unwraps == 3);
 	}
 	SECTION("bytes read before the layer took effect are its start")
@@ -292,7 +292,7 @@ TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]
 		CHECK(buf.empty());
 		auto server = net::transport::wrap(socket_ref{ &sockets.server }, "server");
 		REQUIRE(finish(ioc, net::write_bytes(server, as_bytes(first.substr(7)))).has_value());
-		CHECK(finish(ioc, net::read_message(client, buf)) == bind_response_msg(1, "first"));
+		CHECK(finish(ioc, net::read_message(client, buf)) == bind_resp(1, 0, "first"));
 		// A second layer is refused.
 		auto again = net::detail::install_security_layer(client, buf, std::make_unique<xor_layer>());
 		REQUIRE_FALSE(again.has_value());
@@ -338,7 +338,7 @@ TEST_CASE("sasl layer: a cancelled read keeps the partial buffer", "[net][sasl][
 {
 	// A whole buffer and half of the next arrive before the reader stops, the
 	// rest after.
-	const auto pdu = bytes_of(bind_response_msg(1, "first"));
+	const auto pdu = bytes_of(bind_resp(1, 0, "first"));
 	const std::string second = frame(std::string_view(pdu).substr(3));
 	const std::size_t half = second.size() / 2;
 	layered_pair p;
@@ -354,7 +354,7 @@ TEST_CASE("sasl layer: a cancelled read keeps the partial buffer", "[net][sasl][
 	REQUIRE_FALSE(cancelled.get().has_value());
 	CHECK(cancelled.get().error().code == capy::cond::canceled);
 	p.write_raw(second.substr(half));
-	CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_response_msg(1, "first"));
+	CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_resp(1, 0, "first"));
 	CHECK(p.counts->unwraps == 2);
 }
 
@@ -411,7 +411,7 @@ TEST_CASE("sasl layer: an oversized or broken buffer fails the read", "[net][sas
 	SECTION("the maximum itself is accepted")
 	{
 		layered_pair p(1 << 20, 100);
-		const auto pdu = bytes_of(bind_response_msg(1, std::string(70, 'x')));
+		const auto pdu = bytes_of(bind_resp(1, 0, std::string(70, 'x')));
 		const auto wire = frame(pdu);
 		REQUIRE(wire.size() - 4 <= 100);
 		p.write_raw(wire);

@@ -20,23 +20,9 @@
 namespace ldap = jhetz::ldap;
 using jhetz::ldap::test::from_hex;
 using jhetz::ldap::test::hex;
+using jhetz::ldap::test::value_hex;
+using jhetz::ldap::test::with_value;
 
-namespace {
-
-auto value_hex(const ldap::control &c) -> std::string
-{
-	REQUIRE(c.value.has_value());
-	return hex(std::as_bytes(std::span(*c.value)));
-}
-
-// A control whose value is the given hex bytes.
-auto with_value(std::string_view oid, std::string_view hex_value) -> ldap::control
-{
-	const auto b = from_hex(hex_value);
-	return ldap::control{ oid, false, ldap::detail::as_text(b) };
-}
-
-}// namespace
 
 TEST_CASE("typed request controls encode to their wire form", "[controls]")
 {

@@ -1,5 +1,10 @@
 #pragma once
 
+#include "jhetz/ldap/ber.hpp"
+#include "jhetz/ldap/controls.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -37,6 +42,9 @@ inline auto hex(std::span<const std::byte> data) -> std::string
 	}
 	return out;
 }
+
+inline auto hex(std::string_view s) -> std::string { return hex(std::as_bytes(std::span(s))); }
+inline auto hex(std::span<const unsigned char> data) -> std::string { return hex(std::as_bytes(data)); }
 
 // from_hex("3005 0201") - whitespace ignored; throws on malformed input.
 inline auto from_hex(std::string_view text) -> std::vector<std::byte>
@@ -77,6 +85,20 @@ inline auto bytes_of(std::string_view s) -> std::vector<std::byte>
 {
 	const auto b = std::as_bytes(std::span(s));
 	return { b.begin(), b.end() };
+}
+
+// The hex of a control's value, which it must have.
+inline auto value_hex(const control &c) -> std::string
+{
+	REQUIRE(c.value.has_value());
+	return hex(std::as_bytes(std::span(*c.value)));
+}
+
+// A control whose value is the given hex bytes.
+inline auto with_value(std::string_view oid, std::string_view hex_value) -> control
+{
+	const auto b = from_hex(hex_value);
+	return control{ oid, false, detail::as_text(b) };
 }
 
 }// namespace jhetz::ldap::test

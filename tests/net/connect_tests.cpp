@@ -177,7 +177,7 @@ auto serve_one(net::transport t) -> capy::task<std::string>
 	if (*req != bind_request_msg(1)) {
 		co_return "server: unexpected request";
 	}
-	if (auto w = co_await net::write_message(t, bind_response_msg(1, "welcome")); !w) {
+	if (auto w = co_await net::write_message(t, bind_resp(1, 0, "welcome")); !w) {
 		co_return "server write: " + std::string(w.error().message());
 	}
 	auto end = co_await ldap::testing::read_message(t, buf, as_server);
@@ -251,7 +251,7 @@ auto exchange(corosio::io_context &ioc, std::string text, net::connect_options o
 	if (!r) {
 		co_return "client read: " + std::string(r.error().message());
 	}
-	if (*r != bind_response_msg(1, "welcome")) {
+	if (*r != bind_resp(1, 0, "welcome")) {
 		co_return "client: unexpected response";
 	}
 	t->close();
@@ -1647,7 +1647,7 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 			  co_return "handshake: " + hec.message();
 		  }
 		  auto t = net::transport::wrap(std::move(stream), "server");
-		  if (auto w = co_await net::write_message(t, bind_response_msg(1, "bye")); !w) {
+		  if (auto w = co_await net::write_message(t, bind_resp(1, 0, "bye")); !w) {
 			  co_return std::string(w.error().message());
 		  }
 		  co_return "";// the transport and its socket go away: no close_notify
@@ -1663,7 +1663,7 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 		  }
 		  net::read_buffer buf;
 		  auto first = co_await net::read_message(*t, buf);
-		  if (!first || *first != bind_response_msg(1, "bye")) {
+		  if (!first || *first != bind_resp(1, 0, "bye")) {
 			  co_return "first read failed";
 		  }
 		  auto second = co_await net::read_message(*t, buf);
@@ -1966,7 +1966,7 @@ auto handshake_with_platform_chain(corosio::io_context &ioc,
 	}
 	net::read_buffer buf;
 	auto r = co_await net::read_message(*t, buf);
-	if (!r || *r != bind_response_msg(1, "welcome")) {
+	if (!r || *r != bind_resp(1, 0, "welcome")) {
 		co_return "client read";
 	}
 	co_return "";
