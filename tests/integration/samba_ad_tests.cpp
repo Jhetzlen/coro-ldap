@@ -2,6 +2,7 @@
 //   tests/integration/run_samba_ad.sh ctest --test-dir build -L samba_ad --output-on-failure
 // A strict DC (strong auth required) and a relaxed one, with certificates
 // matched by CN (host_name_matching::legacy). Skipped without them.
+#include "../../src/ntlm_message.hpp"
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/dirsync.hpp"

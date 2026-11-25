@@ -144,23 +144,26 @@ namespace {
 		return name;
 	}
 
-	// `target`'s host and port are allowed.
-	auto server_allowed(const url &target,
-	  std::span<const std::string> allowed,
-	  std::optional<std::uint16_t> origin_port) -> bool
-	{
-		const auto name = usable_host(target);
-		if (!name) {
-			return false;
-		}
-		const bool ip = target.host_is_ipv6() || is_ipv4_literal(target.host());
-		const std::uint16_t port = target.port_or_default();
-		const bool usual_port = port == default_port(target.scheme()) || port == origin_port;
-		return std::ranges::any_of(allowed, [&](const std::string &text) {
-			const auto entry = split_entry(text);
-			return entry && (usual_port || entry->port == port) && host_matches(*name, ip, entry->host);
-		});
+}// namespace
+
+auto detail::referral_server_allowed(const url &target,
+  std::span<const std::string> allowed,
+  std::optional<std::uint16_t> origin_port) -> bool
+{
+	const auto name = usable_host(target);
+	if (!name) {
+		return false;
 	}
+	const bool ip = target.host_is_ipv6() || is_ipv4_literal(target.host());
+	const std::uint16_t port = target.port_or_default();
+	const bool usual_port = port == default_port(target.scheme()) || port == origin_port;
+	return std::ranges::any_of(allowed, [&](const std::string &text) {
+		const auto entry = split_entry(text);
+		return entry && (usual_port || entry->port == port) && host_matches(*name, ip, entry->host);
+	});
+}
+
+namespace {
 
 	// `target`, or the same server under its ASCII name (RFC 4513 section
 	// 3.1.3.1).
@@ -275,18 +278,6 @@ namespace {
 
 namespace detail {
 
-	auto same_policy_plan(const url &target,
-	  bool origin_protected,
-	  const connection_options &options,
-	  std::span<const std::string> allowed_host_suffixes,
-	  std::optional<std::uint16_t> origin_port) -> std::optional<referral_connect_plan>
-	{
-		if (!server_allowed(target, allowed_host_suffixes, origin_port)) {
-			return std::nullopt;
-		}
-		return connect_plan(target, origin_protected, options);
-	}
-
 	auto origin_protected(const connection &origin) -> bool
 	{
 		if (origin.is_tls() || origin.security_layer() == sasl_protection::confidentiality) {
@@ -313,13 +304,6 @@ namespace detail {
 	{
 		const bool bound = static_cast<bool>(setup);
 		return { .setup = std::move(setup), .client_certificate = bound };
-	}
-
-	auto referral_server_allowed(const url &target,
-	  std::span<const std::string> allowed,
-	  std::optional<std::uint16_t> origin_port) -> bool
-	{
-		return server_allowed(target, allowed, origin_port);
 	}
 
 	auto make_policy_connector(corosio::io_context &ioc,
@@ -350,7 +334,7 @@ auto make_same_policy_connector(corosio::io_context &ioc,
 	}
 	auto choose = [allowed = std::move(allowed_host_suffixes), origin_port, setup = std::move(setup)](
 					const url &target, std::size_t /*depth*/) -> std::optional<detail::referral_identity> {
-		if (!server_allowed(target, allowed, origin_port)) {
+		if (!detail::referral_server_allowed(target, allowed, origin_port)) {
 			return std::nullopt;
 		}
 		return detail::same_policy_identity(setup);

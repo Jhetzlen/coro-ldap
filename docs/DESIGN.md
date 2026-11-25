@@ -1058,7 +1058,7 @@ carrying raw NTLMSSP messages, not SPNEGO tokens, which AD accepts
 (MS-ADTS section 3.1.1.3.4.5.2): two BindRequests, NEGOTIATE_MESSAGE then
 AUTHENTICATE_MESSAGE, the CHALLENGE_MESSAGE in the saslBindInProgress
 between them. The messages and MD4 are in the codec
-(`ntlm_message.hpp`, `jhetz::ldap::detail`, so the CHALLENGE_MESSAGE
+(src/ntlm_message.hpp, internal, so the CHALLENGE_MESSAGE
 parser is fuzzed with the others: `ntlm_fuzz`; a server's
 CHALLENGE_MESSAGE encoder and AUTHENTICATE_MESSAGE parser are in the
 testing target, section 10); the mechanism is in

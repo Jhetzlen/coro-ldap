@@ -1025,7 +1025,10 @@ auto plan(std::string_view target,
 	auto u = ldap::url::parse(target);
 	INFO(target);
 	REQUIRE(u.has_value());
-	return ldap::detail::same_policy_plan(*u, origin_tls, options, allowed, origin_port);
+	if (!ldap::detail::referral_server_allowed(*u, allowed, origin_port)) {
+		return std::nullopt;
+	}
+	return ldap::detail::referral_plan(*u, origin_tls, options, { .client_certificate = true });
 }
 
 }// namespace

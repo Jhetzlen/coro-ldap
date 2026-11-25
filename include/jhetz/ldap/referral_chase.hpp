@@ -15,11 +15,9 @@
 #include <boost/corosio/io_context.hpp>
 
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory_resource>
 #include <optional>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -50,20 +48,5 @@ auto chase_compare(connection &origin,
   connection_options options,
   std::vector<std::string> allowed_host_suffixes,
   session_setup setup = {}) -> referral_connector;
-
-namespace detail {
-	// Tests only: how make_same_policy_connector connects to `target`, or
-	// nullopt when it skips it.
-	struct referral_connect_plan
-	{
-		url server{};
-		connection_options options{};
-	};
-	[[nodiscard]] auto same_policy_plan(const url &target,
-	  bool origin_protected,
-	  const connection_options &options,
-	  std::span<const std::string> allowed_host_suffixes,
-	  std::optional<std::uint16_t> origin_port = std::nullopt) -> std::optional<referral_connect_plan>;
-}// namespace detail
 
 }// namespace jhetz::ldap

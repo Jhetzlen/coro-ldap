@@ -3,9 +3,9 @@
 #pragma once
 
 #include "format_util.hpp"
+#include "ntlm_message.hpp"
 
 #include "jhetz/ldap/error.hpp"
-#include "jhetz/ldap/ntlm_message.hpp"
 
 #include <cstddef>
 #include <cstdint>

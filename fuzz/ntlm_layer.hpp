@@ -2,8 +2,8 @@
 // build.
 #pragma once
 
+#include "../src/sasl_ntlm_impl.hpp"
 #include "jhetz/ldap/error.hpp"
-#include "jhetz/ldap/sasl_ntlm.hpp"
 
 #include <cstddef>
 #include <expected>

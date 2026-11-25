@@ -1,5 +1,5 @@
 // Deterministic driver for ntlm_fuzz under ctest.
-#include "jhetz/ldap/ntlm_message.hpp"
+#include "../src/ntlm_message.hpp"
 #include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "replay.hpp"

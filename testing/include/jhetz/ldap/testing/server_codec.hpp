@@ -3,6 +3,7 @@
 // Not part of the installed library.
 #pragma once
 
+#include "../../../../../src/ntlm_message.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/content_sync.hpp"
@@ -10,7 +11,6 @@
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
-#include "jhetz/ldap/ntlm_message.hpp"
 
 #include <cstddef>
 #include <memory_resource>

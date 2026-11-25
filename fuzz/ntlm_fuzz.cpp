@@ -1,6 +1,6 @@
 // libFuzzer target for the MS-NLMP parsers, the client's TargetInfo, the
 // protected buffer split and RC4.
-#include "jhetz/ldap/ntlm_message.hpp"
+#include "../src/ntlm_message.hpp"
 #include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "check.hpp"

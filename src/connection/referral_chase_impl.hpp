@@ -51,6 +51,13 @@ auto chase_compare(connection &origin,
   referral_policy policy,
   chase_settings settings) -> boost::capy::task<chase_result<compare_result>>;
 
+// How a policy connector connects to a server.
+struct referral_connect_plan
+{
+	url server{};
+	connection_options options{};
+};
+
 // make_same_policy_connector's allow-list check of `target`'s host and port.
 [[nodiscard]] auto referral_server_allowed(const url &target,
   std::span<const std::string> allowed,

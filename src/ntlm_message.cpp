@@ -1,5 +1,5 @@
 // The MS-NLMP messages and MD4 (RFC 1320). See ntlm_message.hpp.
-#include "jhetz/ldap/ntlm_message.hpp"
+#include "ntlm_message.hpp"
 
 #include "format_util.hpp"
 #include "icu_util.hpp"

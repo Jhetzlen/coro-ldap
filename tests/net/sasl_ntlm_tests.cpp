@@ -2,9 +2,10 @@
 // binds against a mock DC checking the NTProofStr and MIC, and the
 // security layer through a mock DC layer (dc_layer).
 #include "../../src/net/sasl_layer.hpp"
+#include "../../src/ntlm_message.hpp"
+#include "../../src/sasl_ntlm_impl.hpp"
 #include "../test_util.hpp"
 #include "jhetz/ldap/connection.hpp"
-#include "jhetz/ldap/ntlm_message.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
 #include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"

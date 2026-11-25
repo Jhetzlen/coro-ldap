@@ -4,7 +4,7 @@
 #include "format_util.hpp"
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/channel_binding.hpp"
-#include "jhetz/ldap/ntlm_message.hpp"
+#include "sasl_ntlm_impl.hpp"
 #include "sasl_util.hpp"
 #include "scope_util.hpp"
 

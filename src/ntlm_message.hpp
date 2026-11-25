@@ -1,7 +1,7 @@
 // The NTLM messages of MS-NLMP section 2.2 (NEGOTIATE, CHALLENGE,
 // AUTHENTICATE, AV_PAIRs), MD4, RC4 and message signatures, for sasl_ntlm.
-// Internal, exposed for the tests and the fuzz target. Strings are their
-// wire bytes (UTF-16LE).
+// Internal, also used by the testing target, the tests and the fuzz
+// targets. Strings are their wire bytes (UTF-16LE).
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -19,22 +19,13 @@ namespace jhetz::ldap::detail {
 
 // NegotiateFlags (MS-NLMP section 2.2.2.5), letters A to W there.
 inline constexpr std::uint32_t ntlmssp_negotiate_unicode = 0x0000'0001;// A
-inline constexpr std::uint32_t ntlm_negotiate_oem = 0x0000'0002;// B
 inline constexpr std::uint32_t ntlmssp_request_target = 0x0000'0004;// C
 inline constexpr std::uint32_t ntlmssp_negotiate_sign = 0x0000'0010;// D
 inline constexpr std::uint32_t ntlmssp_negotiate_seal = 0x0000'0020;// E
-inline constexpr std::uint32_t ntlmssp_negotiate_datagram = 0x0000'0040;// F
-inline constexpr std::uint32_t ntlmssp_negotiate_lm_key = 0x0000'0080;// G
 inline constexpr std::uint32_t ntlmssp_negotiate_ntlm = 0x0000'0200;// H
-inline constexpr std::uint32_t ntlmssp_anonymous = 0x0000'0800;// J
-inline constexpr std::uint32_t ntlmssp_negotiate_oem_domain_supplied = 0x0000'1000;// K
-inline constexpr std::uint32_t ntlmssp_negotiate_oem_workstation_supplied = 0x0000'2000;// L
 inline constexpr std::uint32_t ntlmssp_negotiate_always_sign = 0x0000'8000;// M
 inline constexpr std::uint32_t ntlmssp_target_type_domain = 0x0001'0000;// N
-inline constexpr std::uint32_t ntlmssp_target_type_server = 0x0002'0000;// O
 inline constexpr std::uint32_t ntlmssp_negotiate_extended_sessionsecurity = 0x0008'0000;// P
-inline constexpr std::uint32_t ntlmssp_negotiate_identify = 0x0010'0000;// Q
-inline constexpr std::uint32_t ntlmssp_request_non_nt_session_key = 0x0040'0000;// R
 inline constexpr std::uint32_t ntlmssp_negotiate_target_info = 0x0080'0000;// S
 inline constexpr std::uint32_t ntlmssp_negotiate_version = 0x0200'0000;// T
 inline constexpr std::uint32_t ntlmssp_negotiate_128 = 0x2000'0000;// U
@@ -63,9 +54,7 @@ enum class ntlm_av_id : std::uint16_t {
 };
 
 // MsvAvFlags bits (MS-NLMP section 2.2.2.1).
-inline constexpr std::uint32_t msv_av_flags_constrained = 0x0000'0001;
 inline constexpr std::uint32_t msv_av_flags_mic = 0x0000'0002;// the AUTHENTICATE_MESSAGE carries a MIC
-inline constexpr std::uint32_t msv_av_flags_untrusted_spn = 0x0000'0004;
 
 struct ntlm_av_pair
 {
