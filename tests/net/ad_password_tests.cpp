@@ -442,75 +442,14 @@ struct session
 	std::vector<step> script{};
 };
 
-auto serve_session(corosio::tcp_socket &peer, session s, server_log &log) -> capy::task<void>
+auto scripts_of(std::vector<session> sessions) -> std::vector<session_script>
 {
-	if (!s.tls) {
-		co_await serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(s.script), log);
-		co_return;
+	std::vector<session_script> out;
+	for (auto &s : sessions) {
+		out.push_back({ .script = std::move(s.script), .tls = s.tls });
 	}
-	corosio::openssl_stream tls(&peer, server_context());
-	auto [ec] = co_await tls.handshake(corosio::tls_role::server);
-	if (ec) {
-		log.error = "server handshake: " + ec.message();
-		co_return;
-	}
-	co_await serve_script(net::transport::wrap(socket_ref{ &tls }, "server tls"), std::move(s.script), log);
+	return out;
 }
-
-// Accepts connections one after another and runs the n-th session on the
-// n-th, then stops accepting.
-class session_server
-{
-  public:
-	session_server(corosio::io_context &ioc, std::vector<session> sessions)
-	  : ioc_(ioc), acc_(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8), sessions_(std::move(sessions))
-	{
-		spawn(ioc_, accept_loop(), accepting_);
-	}
-	session_server(const session_server &) = delete;
-	auto operator=(const session_server &) -> session_server & = delete;
-	~session_server() { shut_down(); }
-
-	[[nodiscard]] auto url(std::string_view scheme) const -> ldap::url
-	{
-		auto u = ldap::url::parse(std::string(scheme) + "://127.0.0.1:" + std::to_string(acc_.local_endpoint().port()));
-		REQUIRE(u.has_value());
-		return *u;
-	}
-	[[nodiscard]] auto accepted() const -> std::size_t { return logs_.size(); }
-	[[nodiscard]] auto log(std::size_t n) -> server_log & { return logs_.at(n); }
-	void shut_down()
-	{
-		acc_.close();
-		for (auto &p : peers_) {
-			p.close();
-		}
-	}
-
-  private:
-	auto accept_loop() -> capy::task<void>
-	{
-		for (auto &s : sessions_) {
-			auto &peer = peers_.emplace_back(ioc_);
-			auto [ec] = co_await acc_.accept(peer);
-			if (ec) {
-				co_return;
-			}
-			auto &log = logs_.emplace_back();
-			log.hang_up = [&peer] { peer.close(); };
-			spawn(ioc_, serve_session(peer, std::move(s), log), outcomes_.emplace_back());
-		}
-		acc_.close();
-	}
-
-	corosio::io_context &ioc_;
-	corosio::tcp_acceptor acc_;
-	std::vector<session> sessions_;
-	std::deque<corosio::tcp_socket> peers_{};
-	std::deque<server_log> logs_{};
-	std::deque<outcome<void>> outcomes_{};
-	outcome<void> accepting_{};
-};
 
 // How the pool's connector opens a connection.
 enum class opened { normally, closed, failed };
@@ -531,14 +470,14 @@ auto open_as(corosio::io_context &ioc,
 	co_return c;
 }
 
-// A client of a session_server, on one io_context.
+// A client of a script_server, on one io_context.
 struct ad_pool
 {
 	corosio::io_context ioc{};
-	session_server server;
+	script_server server;
 	std::optional<ldap::client> pool{};
 
-	explicit ad_pool(std::vector<session> sessions) : server(ioc, std::move(sessions)) {}
+	explicit ad_pool(std::vector<session> sessions) : server(ioc, scripts_of(std::move(sessions)), server_context()) {}
 	ad_pool(const ad_pool &) = delete;
 	auto operator=(const ad_pool &) -> ad_pool & = delete;
 	~ad_pool()

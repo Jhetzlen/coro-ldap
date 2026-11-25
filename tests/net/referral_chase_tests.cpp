@@ -1355,49 +1355,25 @@ TEST_CASE("make_same_policy_connector: connects, sets up once, reuses", "[net][r
 
 namespace {
 
-// Loopback TCP servers for make_same_policy_connector: accepts connections
-// one after another, running the next script on each.
+// Loopback TCP servers for make_same_policy_connector, running the next
+// script on each connection.
 struct tcp_targets
 {
 	corosio::io_context &ioc;
-	corosio::tcp_acceptor acc;
-	std::deque<corosio::tcp_socket> peers{};
-	std::deque<server_log> logs{};
-	outcome<void> served{};
+	script_server server;
 
 	tcp_targets(corosio::io_context &io, std::vector<std::vector<step>> scripts)
-	  : ioc(io), acc{ io, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 }
-	{
-		for (std::size_t i = 0; i < scripts.size(); ++i) {
-			auto &p = peers.emplace_back(ioc);
-			logs.emplace_back().hang_up = [&p] { p.close(); };
-		}
-		spawn(ioc, serve_all(std::move(scripts)), served);
-	}
+	  : ioc(io), server(io, std::move(scripts))
+	{}
 	tcp_targets(const tcp_targets &) = delete;
 	auto operator=(const tcp_targets &) -> tcp_targets & = delete;
 	~tcp_targets()
 	{
-		for (auto &p : peers) {
-			p.close();
-		}
-		acc.close();
+		server.shut_down();
 		drive(ioc);
 	}
 
-	auto serve_all(std::vector<std::vector<step>> scripts) -> capy::task<void>
-	{
-		for (std::size_t i = 0; i < scripts.size(); ++i) {
-			auto [ec] = co_await acc.accept(peers[i]);
-			if (ec) {
-				throw std::system_error(ec, "accept");
-			}
-			co_await serve_script(
-			  net::transport::wrap(socket_ref{ &peers[i] }, "peer"), std::move(scripts[i]), logs[i]);
-		}
-	}
-
-	auto port() const -> std::uint16_t { return acc.local_endpoint().port(); }
+	auto port() const -> std::uint16_t { return server.port(); }
 	auto url(std::string_view dn) const -> std::pmr::string
 	{
 		return std::pmr::string("ldap://127.0.0.1:" + std::to_string(port()) + "/") + std::pmr::string(dn);
@@ -1407,10 +1383,9 @@ struct tcp_targets
 	// Every script ran to its end without errors.
 	void check()
 	{
-		drive_until(ioc, [this] { return served.done(); });
-		served.get();
-		for (const auto &l : logs) {
-			CHECK(l.error.empty());
+		drive_until(ioc, [this] { return server.finished(); });
+		for (std::size_t i = 0; i < server.accepted(); ++i) {
+			CHECK(server.log(i).error.empty());
 		}
 	}
 };
@@ -1453,8 +1428,8 @@ TEST_CASE("make_same_policy_connector: a refused StartTLS fails the URI", "[net]
 	CHECK(r->referrals[0].failure.has_value());
 	// Only the StartTLS request: no bind, no search in the clear.
 	t.check();
-	REQUIRE(t.logs[0].received.size() == 1);
-	CHECK(std::holds_alternative<ldap::extended_request>(t.logs[0].received[0].op));
+	REQUIRE(t.server.log(0).received.size() == 1);
+	CHECK(std::holds_alternative<ldap::extended_request>(t.server.log(0).received[0].op));
 	w.check_servers();
 	connector = {};
 }
@@ -1474,8 +1449,8 @@ TEST_CASE("make_same_policy_connector: a failed setup fails the URI", "[net][ref
 	REQUIRE(r->referrals[0].failure);
 	CHECK(r->referrals[0].failure->code == errc::invalid_credentials);
 	t.check();
-	REQUIRE(t.logs[0].received.size() == 1);
-	CHECK(std::holds_alternative<ldap::bind_request>(t.logs[0].received[0].op));
+	REQUIRE(t.server.log(0).received.size() == 1);
+	CHECK(std::holds_alternative<ldap::bind_request>(t.server.log(0).received[0].op));
 	w.check_servers();
 	connector = {};
 }
@@ -1525,11 +1500,11 @@ TEST_CASE("make_same_policy_connector: a closed connection is reopened", "[net][
 	CHECK(outcomes(r->referrals)
 		  == std::vector{ referral_outcome::followed, referral_outcome::failed, referral_outcome::followed });
 	t.check();
-	REQUIRE(t.logs[0].received.size() == 3);
-	CHECK(std::get<ldap::search_request>(t.logs[0].received[2].op).base_object == "ou=c,dc=example,dc=org");
-	REQUIRE(t.logs[1].received.size() == 2);
-	CHECK(std::holds_alternative<ldap::bind_request>(t.logs[1].received[0].op));
-	CHECK(std::get<ldap::search_request>(t.logs[1].received[1].op).base_object == "ou=d,dc=example,dc=org");
+	REQUIRE(t.server.log(0).received.size() == 3);
+	CHECK(std::get<ldap::search_request>(t.server.log(0).received[2].op).base_object == "ou=c,dc=example,dc=org");
+	REQUIRE(t.server.log(1).received.size() == 2);
+	CHECK(std::holds_alternative<ldap::bind_request>(t.server.log(1).received[0].op));
+	CHECK(std::get<ldap::search_request>(t.server.log(1).received[1].op).base_object == "ou=d,dc=example,dc=org");
 	w.check_servers();
 	connector = {};
 }

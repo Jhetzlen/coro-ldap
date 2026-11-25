@@ -81,49 +81,41 @@ auto server_context() -> corosio::tls_context
 // (ldaps://).
 enum class served { clear, tls };
 
-// Runs the n-th script on the n-th connection, then refuses connects.
-// stop() ends the sessions after session_grace and joins.
+// A script_server on its own I/O thread. stop() ends the sessions after
+// session_grace and joins.
 class threaded_script_server
 {
   public:
 	explicit threaded_script_server(std::vector<std::vector<step>> scripts, served how = served::clear)
-	  : scripts_(std::move(scripts))
+	  : server_(ioc_,
+		  std::move(scripts),
+		  how == served::tls ? std::optional<corosio::tls_context>(server_context()) : std::nullopt),
+		tls_(how == served::tls)
 	{
-		if (how == served::tls) {
-			tls_.emplace(server_context());
-		}
-		capy::run_async(ioc_.get_executor())(accept_loop());
 		thread_ = std::thread([this] { ioc_.run(); });
 	}
 	threaded_script_server(const threaded_script_server &) = delete;
 	auto operator=(const threaded_script_server &) -> threaded_script_server & = delete;
 	~threaded_script_server() { stop(); }
 
-	[[nodiscard]] auto url() const -> ldap::url
-	{
-		return *ldap::url::parse((tls_ ? "ldaps://127.0.0.1:" : "ldap://127.0.0.1:") + std::to_string(port_));
-	}
-	[[nodiscard]] auto accepted() const -> std::size_t { return accepted_; }
+	[[nodiscard]] auto url() const -> ldap::url { return server_.url(tls_ ? "ldaps" : "ldap"); }
+	[[nodiscard]] auto accepted() const -> std::size_t { return server_.accepted(); }
 	// After stop().
-	[[nodiscard]] auto log(std::size_t n) -> server_log & { return logs_.at(n); }
+	[[nodiscard]] auto log(std::size_t n) -> server_log & { return server_.log(n); }
 
 	void stop()
 	{
 		if (!thread_.joinable()) {
 			return;
 		}
-		capy::run_async(ioc_.get_executor())([](threaded_script_server &s) -> capy::task<void> {
+		capy::run_async(ioc_.get_executor())([](script_server &s) -> capy::task<void> {
 			const auto give_up = std::chrono::steady_clock::now() + session_grace;
-			while (!std::ranges::all_of(s.sessions_, [](const outcome<void> &o) { return o.done(); })
-				   && std::chrono::steady_clock::now() < give_up) {
+			while (!s.finished() && std::chrono::steady_clock::now() < give_up) {
 				(void)co_await corosio::delay(milliseconds(1));
 			}
-			s.acc_.close();
-			for (auto &p : s.peers_) {
-				p.close();
-			}
+			s.shut_down();
 			co_return;
-		}(*this));
+		}(server_));
 		guard_.reset();
 		thread_.join();
 	}
@@ -132,50 +124,11 @@ class threaded_script_server
 	// How long stop() waits for the sessions to end by themselves.
 	static constexpr milliseconds session_grace{ 5'000 };
 
-	auto accept_loop() -> capy::task<void>
-	{
-		for (auto &script : scripts_) {
-			auto &peer = peers_.emplace_back(ioc_);
-			auto [ec] = co_await acc_.accept(peer);
-			if (ec) {
-				co_return;
-			}
-			auto &log = logs_.emplace_back();
-			log.hang_up = [&peer] { peer.close(); };
-			// Counted first: the session may run its whole script before
-			// spawn() returns, and the client thread check accepted() then.
-			++accepted_;
-			spawn(ioc_, session(peer, script, log), sessions_.emplace_back());
-		}
-		acc_.close();
-	}
-
-	auto session(corosio::tcp_socket &peer, std::vector<step> script, server_log &log) -> capy::task<void>
-	{
-		if (!tls_) {
-			co_await serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(script), log);
-			co_return;
-		}
-		corosio::openssl_stream tls(&peer, *tls_);
-		auto [ec] = co_await tls.handshake(corosio::tls_role::server);
-		if (ec) {
-			log.error = "server handshake: " + ec.message();
-			co_return;
-		}
-		co_await serve_script(net::transport::wrap(socket_ref{ &tls }, "server tls"), std::move(script), log);
-	}
-
 	corosio::io_context ioc_{};
 	// Keeps run() going until stop().
 	std::optional<capy::work_guard<corosio::io_context::executor_type>> guard_{ ioc_.get_executor() };
-	corosio::tcp_acceptor acc_{ ioc_, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8 };
-	std::uint16_t port_ = acc_.local_endpoint().port();
-	std::vector<std::vector<step>> scripts_;
-	std::optional<corosio::tls_context> tls_{};
-	std::deque<corosio::tcp_socket> peers_{};
-	std::deque<server_log> logs_{};
-	std::deque<outcome<void>> sessions_{};
-	std::atomic<std::size_t> accepted_{ 0 };
+	script_server server_;
+	bool tls_;
 	std::thread thread_{};
 };
 

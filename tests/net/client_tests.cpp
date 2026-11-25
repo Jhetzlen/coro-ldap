@@ -64,89 +64,6 @@ auto hang_up_at_once() -> std::vector<step>
 // Answers the setup's simple bind (message id 1), then reads nothing more.
 auto bind_ok() -> std::vector<step> { return { answer({ bind_resp(1) }) }; }
 
-class ldap_server
-{
-  public:
-	// socket_buffers::small: the accepted connections' receive buffer is
-	// small_socket_buffer (mock_ldap.hpp).
-	ldap_server(corosio::io_context &ioc,
-	  std::vector<std::vector<step>> scripts,
-	  socket_buffers buffers = socket_buffers::system)
-	  : ioc_(ioc), acc_(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8), scripts_(std::move(scripts)),
-		port_(acc_.local_endpoint().port())
-	{
-		if (buffers == socket_buffers::small) {
-			REQUIRE_FALSE(acc_.set_option(corosio::socket_option::receive_buffer_size(small_socket_buffer)));
-		}
-		spawn(ioc_, accept_loop(), accepting_);
-	}
-	ldap_server(const ldap_server &) = delete;
-	auto operator=(const ldap_server &) -> ldap_server & = delete;
-	~ldap_server() { shut_down(); }
-
-	[[nodiscard]] auto url() const -> ldap::url
-	{
-		auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(port_));
-		REQUIRE(u.has_value());
-		return *u;
-	}
-	[[nodiscard]] auto endpoint() const -> corosio::endpoint { return { corosio::ipv4_address::loopback(), port_ }; }
-	[[nodiscard]] auto accepted() const -> std::size_t { return logs_.size(); }
-	// The SO_RCVBUF of the server's end of the n-th connection, as the
-	// kernel reports it.
-	[[nodiscard]] auto receive_buffer(std::size_t n) const -> std::size_t
-	{
-		const auto [ec, received] = peers_.at(n).get_option<corosio::socket_option::receive_buffer_size>();
-		REQUIRE_FALSE(ec);
-		return static_cast<std::size_t>(received.value());
-	}
-	[[nodiscard]] auto log(std::size_t n) -> server_log & { return logs_.at(n); }
-	[[nodiscard]] auto session(std::size_t n) -> outcome<void> & { return sessions_.at(n); }
-	// The server closes the n-th connection.
-	void drop(std::size_t n) { peers_.at(n).close(); }
-	// The server resets the n-th connection (SO_LINGER 0: an RST, not a FIN).
-	void reset(std::size_t n)
-	{
-		auto &p = peers_.at(n);
-		REQUIRE_FALSE(p.set_option(corosio::socket_option::linger(true, 0)));
-		p.close();
-	}
-	void shut_down()
-	{
-		acc_.close();
-		for (auto &p : peers_) {
-			p.close();
-		}
-	}
-
-  private:
-	auto accept_loop() -> capy::task<void>
-	{
-		for (auto &script : scripts_) {
-			auto &peer = peers_.emplace_back(ioc_);
-			auto [ec] = co_await acc_.accept(peer);
-			if (ec) {
-				co_return;
-			}
-			auto &log = logs_.emplace_back();
-			log.hang_up = [&peer] { peer.close(); };
-			spawn(ioc_,
-			  serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), script, log),
-			  sessions_.emplace_back());
-		}
-		acc_.close();
-	}
-
-	corosio::io_context &ioc_;
-	corosio::tcp_acceptor acc_;
-	std::vector<std::vector<step>> scripts_;
-	std::uint16_t port_;
-	std::deque<corosio::tcp_socket> peers_{};
-	std::deque<server_log> logs_{};
-	std::deque<outcome<void>> sessions_{};
-	outcome<void> accepting_{};
-};
-
 auto text(const ldap::url &u) -> std::string { return std::string(std::string_view(u.to_string())); }
 
 auto reason_name(ldap::disconnect_reason r) -> std::string_view
@@ -259,7 +176,7 @@ auto retries(const recorder &r) -> std::ptrdiff_t
 struct pool_fixture
 {
 	corosio::io_context ioc{};
-	std::deque<ldap_server> servers{};
+	std::deque<script_server> servers{};
 	std::deque<refused_port> refused{};
 	std::optional<ldap::client> pool{};
 	recorder obs{};
@@ -277,9 +194,9 @@ struct pool_fixture
 	}
 
 	auto server(std::vector<std::vector<step>> scripts, socket_buffers buffers = socket_buffers::system)
-	  -> ldap_server &
+	  -> script_server &
 	{
-		return servers.emplace_back(ioc, std::move(scripts), buffers);
+		return servers.emplace_back(ioc, std::move(scripts), std::nullopt, buffers);
 	}
 	// Connects are refused at once while the fixture lives.
 	auto refused_url() -> ldap::url
@@ -2242,13 +2159,13 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 namespace {
 
 // `srv`'s URL with `dn`, as a referral names it.
-auto ref_to(const ldap_server &srv, std::string_view dn) -> std::pmr::string
+auto ref_to(const script_server &srv, std::string_view dn) -> std::pmr::string
 {
 	return std::pmr::string(text(srv.url()) + "/" + std::string(dn));
 }
 
 // The allow-list entry for `srv` (its port is not the default one).
-auto domain_of(const ldap_server &srv) -> std::string
+auto domain_of(const script_server &srv) -> std::string
 {
 	return "127.0.0.1:" + std::to_string(srv.url().port_or_default());
 }
@@ -3019,7 +2936,7 @@ auto open_small(corosio::io_context &ioc,
 
 // Opens the pooled connections of `pool` with connect_small_tcp() to
 // `server`; `send_buffer` receives their SO_SNDBUF.
-void connect_small(const ldap::client &pool, const ldap_server &server, std::size_t *send_buffer)
+void connect_small(const ldap::client &pool, const script_server &server, std::size_t *send_buffer)
 {
 	ldap::detail::test_access::set_connector(pool,
 	  [to = server.endpoint(), send_buffer](corosio::io_context &ioc,
