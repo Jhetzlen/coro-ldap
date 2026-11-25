@@ -334,6 +334,22 @@ endif()
 
 # cmake --install: headers, libraries and the jhetz_ldap package;
 # jhetz::ldap and jhetz::ldap_ad need Corosio and Capy installed.
+# The public headers (and directories) that need jhetz::ldap, under include/:
+# left out of a codec-only install, and checked against jhetz::ldap by the
+# tests and tests/install/check_install.sh.
+set(JHETZ_LDAP_CLIENT_HEADERS
+    jhetz/ldap/net
+    jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
+    jhetz/ldap/directory.hpp jhetz/ldap/extended_operations.hpp jhetz/ldap/paged_search.hpp
+    jhetz/ldap/referral_chase.hpp jhetz/ldap/repository.hpp jhetz/ldap/run.hpp jhetz/ldap/search_stream.hpp
+    jhetz/ldap/transaction.hpp jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp
+    jhetz/ldap/sync.hpp jhetz/ldap/sync_extended_operations.hpp jhetz/ldap/sync_repository.hpp
+    jhetz/ldap/ad/dirsync.hpp jhetz/ldap/ad/discover.hpp jhetz/ldap/ad/password.hpp
+    jhetz/ldap/ad/ranged_values.hpp jhetz/ldap/ad/sync.hpp)
+string(REPLACE ";" "\n" jhetz_ldap_client_header_lines "${JHETZ_LDAP_CLIENT_HEADERS}")
+file(CONFIGURE OUTPUT ${PROJECT_BINARY_DIR}/jhetz_ldap_client_headers.txt
+    CONTENT "${jhetz_ldap_client_header_lines}\n")
+
 if(JHETZ_LDAP_INSTALL)
     include(CMakePackageConfigHelpers)
     set(jhetz_ldap_install_targets jhetz_ldap_core)
@@ -362,32 +378,12 @@ if(JHETZ_LDAP_INSTALL)
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "sasl_gssapi.hpp" EXCLUDE)
     else()
-        # Without jhetz::ldap its headers are left out; the same list as
-        # jhetz_ldap_client_headers in tests/CMakeLists.txt and check_install.sh.
-        install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-            PATTERN "net" EXCLUDE
-            PATTERN "cancel.hpp" EXCLUDE
-            PATTERN "client.hpp" EXCLUDE
-            PATTERN "connection.hpp" EXCLUDE
-            PATTERN "connection_options.hpp" EXCLUDE
-            PATTERN "directory.hpp" EXCLUDE
-            PATTERN "extended_operations.hpp" EXCLUDE
-            PATTERN "paged_search.hpp" EXCLUDE
-            PATTERN "referral_chase.hpp" EXCLUDE
-            PATTERN "run.hpp" EXCLUDE
-            PATTERN "search_stream.hpp" EXCLUDE
-            PATTERN "repository.hpp" EXCLUDE
-            PATTERN "transaction.hpp" EXCLUDE
-            PATTERN "sasl_ntlm.hpp" EXCLUDE
-            PATTERN "sasl_scram.hpp" EXCLUDE
-            PATTERN "sasl_gssapi.hpp" EXCLUDE
-            PATTERN "sync.hpp" EXCLUDE
-            PATTERN "sync_extended_operations.hpp" EXCLUDE
-            PATTERN "sync_repository.hpp" EXCLUDE
-            PATTERN "password.hpp" EXCLUDE
-            PATTERN "ranged_values.hpp" EXCLUDE
-            PATTERN "dirsync.hpp" EXCLUDE
-            PATTERN "discover.hpp" EXCLUDE)
+        set(jhetz_ldap_client_excludes)
+        foreach(header ${JHETZ_LDAP_CLIENT_HEADERS})
+            string(REPLACE "." "\\." header_regex ${header})
+            list(APPEND jhetz_ldap_client_excludes REGEX "/include/${header_regex}$" EXCLUDE)
+        endforeach()
+        install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} ${jhetz_ldap_client_excludes})
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})
     configure_package_config_file(cmake/jhetz_ldap-config.cmake.in

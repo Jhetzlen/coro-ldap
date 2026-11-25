@@ -108,22 +108,19 @@ endif()
 # against jhetz::ldap_core alone.
 file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
     RELATIVE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/jhetz/ldap/*.hpp)
-# The headers that need jhetz::ldap (the same list as the root
-# CMakeLists.txt's install EXCLUDE patterns).
-set(jhetz_ldap_client_headers
-    jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
-    jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/run.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
-    jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp
-    jhetz/ldap/directory.hpp jhetz/ldap/extended_operations.hpp jhetz/ldap/repository.hpp jhetz/ldap/sync_extended_operations.hpp
-    jhetz/ldap/sync_repository.hpp
-    jhetz/ldap/ad/dirsync.hpp jhetz/ldap/ad/discover.hpp jhetz/ldap/ad/password.hpp jhetz/ldap/ad/ranged_values.hpp jhetz/ldap/ad/sync.hpp)
 set(jhetz_ldap_codec_header_tus)
 set(jhetz_ldap_client_header_tus)
 foreach(header ${jhetz_ldap_public_headers})
     string(REGEX REPLACE "[/.]" "_" stem ${header})
     set(tu ${CMAKE_CURRENT_BINARY_DIR}/header_check/${stem}.cpp)
     file(CONFIGURE OUTPUT ${tu} CONTENT "#include \"${header}\"\n#include \"${header}\" // NOLINT(readability-duplicate-include): included twice on purpose, to check #pragma once\n")
-    if(header MATCHES "^jhetz/ldap/net/" OR header IN_LIST jhetz_ldap_client_headers)
+    set(client_header OFF)
+    foreach(client ${JHETZ_LDAP_CLIENT_HEADERS})
+        if(header STREQUAL client OR header MATCHES "^${client}/")
+            set(client_header ON)
+        endif()
+    endforeach()
+    if(client_header)
         list(APPEND jhetz_ldap_client_header_tus ${tu})
     else()
         list(APPEND jhetz_ldap_codec_header_tus ${tu})

@@ -71,14 +71,13 @@ cmake -S "$root" -B "$work/build/ldap-codec" $gen -DCMAKE_INSTALL_PREFIX="$work/
 	-DJHETZ_LDAP_BUILD_NET=OFF -DJHETZ_LDAP_BUILD_TESTS=OFF >/dev/null
 cmake --build "$work/build/ldap-codec" >/dev/null
 cmake --install "$work/build/ldap-codec" >/dev/null
-# The net-only headers, as excluded in the root CMakeLists.txt's install().
-for h in net cancel.hpp client.hpp connection.hpp connection_options.hpp directory.hpp extended_operations.hpp paged_search.hpp referral_chase.hpp run.hpp search_stream.hpp \
-	sasl_ntlm.hpp sasl_scram.hpp sasl_gssapi.hpp repository.hpp sync.hpp sync_extended_operations.hpp sync_repository.hpp transaction.hpp ad/dirsync.hpp ad/discover.hpp ad/password.hpp ad/ranged_values.hpp ad/sync.hpp; do
-	if [ -e "$work/prefix-codec/include/jhetz/ldap/$h" ]; then
+# The headers that need jhetz::ldap (JHETZ_LDAP_CLIENT_HEADERS).
+while read -r h; do
+	if [ -e "$work/prefix-codec/include/$h" ]; then
 		echo "unexpected: $h installed without jhetz::ldap"
 		exit 1
 	fi
-done
+done <"$work/build/ldap-codec/jhetz_ldap_client_headers.txt"
 step "consumer with COMPONENTS core (jhetz::ldap_core)"
 cmake -S "$here/consumer" -B "$work/build/consumer-codec" $gen -DCMAKE_PREFIX_PATH="$work/prefix-codec" \
 	-DWITH_NET=OFF >/dev/null
