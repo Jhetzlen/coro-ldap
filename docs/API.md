@@ -350,7 +350,10 @@ itself needs only ICU.
     revocation fetches bounded by the timeout, at most 20 s);
     `cert_file` and `key_file` go together, or else `cert_pem` and
     `key_pem` (PEM text, e.g. from a PKCS#12 file or a platform store;
-    the key unencrypted), not both; `server_name` (default the
+    the certificate first, then its chain; the key unencrypted, PKCS#8 or
+    traditional PEM), not both. `key_pem` is copied with the options (and
+    into the TLS context) and never wiped by the library: the caller owns
+    the key's lifetime in memory. `server_name` (default the
     URL's host) rejects control characters, and a trailing dot is dropped
     before SNI and matching. Not allocator-aware.
   - The connect task must run on `ioc`'s executor, its continuations not

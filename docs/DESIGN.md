@@ -602,8 +602,8 @@ saslBindInProgress (at most 32 steps). A mechanism implements
 `step(challenge)` and `complete(final server creds)`, which lets a
 mechanism such as SCRAM verify the server. `sasl_external` (RFC 4422
 appendix A) is provided, with an optional authorization identity; the
-identity comes from a TLS client certificate (`tls_options::cert_file`) or
-an ldapi:// socket. A server or mechanism error fails the bind and leaves
+identity comes from a TLS client certificate (`tls_options::cert_file` /
+`key_file`, or `cert_pem` / `key_pem` as PEM text) or an ldapi:// socket. A server or mechanism error fails the bind and leaves
 the connection usable, except a `complete()` that refuses the server's
 success: the server then considers the connection bound, so `sasl_bind`
 closes it. An end-to-end EXTERNAL test needs a real server
@@ -2394,7 +2394,8 @@ Implemented under it (step 4, `jhetz_ldap`, namespace `ldap::net`):
   entries, zone stripped; a DNS name's trailing dot dropped, as RFC 6066
   section 3 sends SNI and as OpenSSL 4.1's X509_VERIFY_PARAM_set1_host
   requires) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
-  `ca_pem`, client `cert_file` + `key_file`, `server_name`; the only opt-out
+  `ca_pem`, client `cert_file` + `key_file` or `cert_pem` + `key_pem` (PEM
+  text; one pair or the other), `server_name`; the only opt-out
   is `certificate_verification::insecure_accept_any`. Configuration errors
   (bad or mismatched PEM certificates and keys, missing `ca_dir`) fail before
   any network traffic. Host matching is strict by default (RFC 6125, RFC
@@ -3545,9 +3546,11 @@ and read through `detail::lease_access`.
   It is asked only for URLs that pass the connector's fixed rules (no
   ldapi://, a plausible host), and `same_setup` is the only way the
   client's credentials reach a referred server: its TLS client
-  certificate (`tls.cert_file` / `key_file`) included, which an
-  `anonymous` connection does not present (`referral_identity::
-  client_certificate`, applied by `detail::referral_plan`), since a
+  certificate (`tls.cert_file` / `key_file` or `tls.cert_pem` /
+  `key_pem`) included, which an `anonymous` connection does not present
+  (`referral_identity::client_certificate`, applied by
+  `detail::referral_plan` through `net::detail::clear_client_credentials`,
+  which drops every client credential field), since a
   server may authenticate a TLS connection by its certificate alone
   (mutual TLS, certificate mapping, SASL EXTERNAL); the mapping is
   `detail::client_referral_identity`. `make_same_policy_connector` follows the same rule with its own setup

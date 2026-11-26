@@ -52,8 +52,11 @@ struct tls_options
 	// text (e.g. read from a PKCS#12 file or a platform store), not both.
 	std::filesystem::path cert_file{};
 	std::filesystem::path key_file{};
-	std::pmr::string cert_pem{};// the certificate, then its chain if any
-	std::pmr::string key_pem{};// unencrypted
+	// The leaf certificate first; its chain may follow.
+	std::pmr::string cert_pem{};
+	// Unencrypted, PKCS#8 or traditional PEM; copied with the options and
+	// not wiped by the library (the caller owns its lifetime).
+	std::pmr::string key_pem{};
 
 	// SNI and the name matched; empty: the URL's host.
 	std::pmr::string server_name{};

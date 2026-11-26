@@ -7,6 +7,10 @@ package matches only the same minor version (`find_package(jhetz_ldap 0.2)`,
 
 ## Unreleased
 
+### Added
+
+- `tls_options::cert_pem` and `key_pem`: the TLS client certificate (then its chain) and its unencrypted key as PEM text, instead of `cert_file` and `key_file`.
+
 ## 0.2.0 (2026-11-25)
 
 ### Breaking
