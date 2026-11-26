@@ -1358,6 +1358,24 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 		CHECK_THAT(client.get(), IsEmpty());
 		CHECK_THAT(server.get(), IsEmpty());
 	}
+	SECTION("presented, as PEM text with its chain")
+	{
+		// The server trusts only the root: the intermediate comes from cert_pem.
+		test_pki intermediate("jhetz-ldap test intermediate CA", pki());
+		const auto chained = intermediate.issue("client-chained", "DNS:client.example");
+		spawn(ioc, accept_and_serve(srv.acc, ctx), server);
+		spawn(ioc,
+		  exchange(ioc,
+			srv.url("ldaps"),
+			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
+				.cert_pem = std::pmr::string(chained.cert_pem + intermediate.ca_pem()),
+				.key_pem = std::pmr::string(chained.key_pem) } },
+			true),
+		  client);
+		drive(ioc);
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
+	}
 	SECTION("refused before connecting: files and PEM text together, or half of the PEM pair")
 	{
 		auto both = connect_to(ioc,
@@ -1526,6 +1544,48 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	CHECK(std::string(locked.error().context)
 		  == "connect ldaps://127.0.0.1:1: tls: key_file " + encrypted.str()
 			   + ": no parseable PEM private key (encrypted keys are not supported)");
+
+	// The same checks on PEM text; the contexts name the fields, never the PEM.
+	const std::string encrypted_pem = test_pki::encrypted_key_pem(one.key_pem, "passphrase");
+	auto junk_cert_pem = connect_to(ioc,
+	  "ldaps://127.0.0.1:1",
+	  { .tls = { .cert_pem = "not pem at all\n", .key_pem = std::pmr::string(one.key_pem) } });
+	REQUIRE_FALSE(junk_cert_pem.has_value());
+	CHECK(junk_cert_pem.error().code == std::errc::invalid_argument);
+	CHECK(std::string(junk_cert_pem.error().context)
+		  == "connect ldaps://127.0.0.1:1: tls: cert_pem: no parseable PEM certificate");
+	auto mismatch_pem = connect_to(ioc,
+	  "ldaps://127.0.0.1:1",
+	  { .tls = { .cert_pem = std::pmr::string(one.cert_pem), .key_pem = std::pmr::string(two.key_pem) } });
+	REQUIRE_FALSE(mismatch_pem.has_value());
+	CHECK(mismatch_pem.error().code == std::errc::invalid_argument);
+	CHECK(std::string(mismatch_pem.error().context)
+		  == "connect ldaps://127.0.0.1:1: tls: key_pem: does not match the certificate in tls: cert_pem");
+	auto locked_pem = connect_to(ioc,
+	  "ldaps://127.0.0.1:1",
+	  { .tls = { .cert_pem = std::pmr::string(one.cert_pem), .key_pem = std::pmr::string(encrypted_pem) } });
+	REQUIRE_FALSE(locked_pem.has_value());
+	CHECK(locked_pem.error().code == std::errc::invalid_argument);
+	CHECK(std::string(locked_pem.error().context)
+		  == "connect ldaps://127.0.0.1:1: tls: key_pem: no parseable PEM private key (encrypted keys are not "
+			 "supported)");
+	auto both_pem = connect_to(ioc,
+	  "ldaps://127.0.0.1:1",
+	  { .tls = { .cert_file = cert_one.path(),
+		  .key_file = key_one.path(),
+		  .cert_pem = std::pmr::string(one.cert_pem),
+		  .key_pem = std::pmr::string(one.key_pem) } });
+	REQUIRE_FALSE(both_pem.has_value());
+	auto half_pem = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .key_pem = std::pmr::string(one.key_pem) } });
+	REQUIRE_FALSE(half_pem.has_value());
+	for (const auto *e : { &junk_cert_pem, &mismatch_pem, &locked_pem, &both_pem, &half_pem }) {
+		CHECK_THAT(std::string(e->error().context), !ContainsSubstring("BEGIN") && !ContainsSubstring("-----"));
+	}
+	auto valid_pem = connect_to(ioc,
+	  "ldaps://127.0.0.1:1",
+	  { .tls = { .cert_pem = std::pmr::string(one.cert_pem), .key_pem = std::pmr::string(one.key_pem) } });
+	REQUIRE_FALSE(valid_pem.has_value());
+	CHECK_THAT(std::string(valid_pem.error().context), ContainsSubstring("tcp connect"));
 
 	// A CA file without any PEM certificate.
 	auto empty_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = junk.path() } });

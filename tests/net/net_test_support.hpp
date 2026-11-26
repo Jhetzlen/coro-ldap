@@ -350,6 +350,23 @@ class test_pki
 		ca_pem_ = to_pem(ca_cert_.get());
 	}
 
+	// An intermediate CA signed by `issuer`: its leaves chain to issuer's CA
+	// through ca_pem().
+	test_pki(const char *ca_name, test_pki &issuer)
+	{
+		ca_key_.reset(generate_key());
+		ca_cert_.reset(make_cert(ca_key_.get(),
+		  { &ca_name, 1 },
+		  issuer.ca_cert_.get(),
+		  issuer.ca_key_.get(),
+		  true,
+		  {},
+		  {},
+		  issuer.next_serial(),
+		  {}));
+		ca_pem_ = to_pem(ca_cert_.get());
+	}
+
 	[[nodiscard]] auto ca_pem() const noexcept -> const std::string & { return ca_pem_; }
 
 	// The CA's subject name hash: "<hash, 8 hex digits>.0" is its file name
