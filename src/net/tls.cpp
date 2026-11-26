@@ -576,6 +576,15 @@ auto prime_corosio_openssl() noexcept -> bool
 	}
 }
 
+// Every field load_client_credentials() reads.
+void clear_client_credentials(tls_options &o) noexcept
+{
+	o.cert_file.clear();
+	o.key_file.clear();
+	o.cert_pem.clear();
+	o.key_pem.clear();
+}
+
 auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 {
 	// Before any of our tls_contexts reaches its first handshake (see tls.hpp).

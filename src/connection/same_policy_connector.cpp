@@ -3,6 +3,7 @@
 #include "jhetz/ldap/referral_chase.hpp"
 
 #include "../net/host_name.hpp"
+#include "../net/tls.hpp"
 #include "referral_chase_impl.hpp"
 
 #include <boost/capy/error.hpp>
@@ -294,8 +295,7 @@ namespace detail {
 	{
 		auto plan = connect_plan(target, origin_protected, options);
 		if (plan && !chosen.client_certificate) {
-			plan->options.tls.cert_file.clear();
-			plan->options.tls.key_file.clear();
+			net::detail::clear_client_credentials(plan->options.tls);
 		}
 		return plan;
 	}

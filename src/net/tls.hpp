@@ -68,6 +68,10 @@ auto prime_corosio_openssl() noexcept -> bool;
 // every certificate; errors start with "tls: ".
 auto make_tls_setup(const tls_options &options) -> result<tls_setup>;
 
+// Drops the client certificate and key (files and PEM text), so that
+// make_tls_setup() presents none.
+void clear_client_credentials(tls_options &options) noexcept;
+
 // options.server_name, else `host` without an IPv6 zone or a trailing dot.
 auto tls_peer_name(std::string_view host, const tls_options &options) -> std::string;
 

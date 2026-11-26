@@ -1191,6 +1191,8 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 	ldap::connection_options options;
 	options.tls.cert_file = "client.pem";
 	options.tls.key_file = "client.key";
+	options.tls.cert_pem = "client certificate PEM";
+	options.tls.key_pem = "client key PEM";
 	auto target = ldap::url::parse("ldaps://b.example.org/ou=b");
 	REQUIRE(target.has_value());
 	SECTION("anonymous: left out")
@@ -1201,6 +1203,8 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 			REQUIRE(p);
 			CHECK(p->options.tls.cert_file.empty());
 			CHECK(p->options.tls.key_file.empty());
+			CHECK(p->options.tls.cert_pem.empty());
+			CHECK(p->options.tls.key_pem.empty());
 			CHECK(p->server.scheme() == ldap::url_scheme::ldaps);
 		}
 	}
@@ -1211,6 +1215,8 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 		REQUIRE(p);
 		CHECK(p->options.tls.cert_file == "client.pem");
 		CHECK(p->options.tls.key_file == "client.key");
+		CHECK(p->options.tls.cert_pem == "client certificate PEM");
+		CHECK(p->options.tls.key_pem == "client key PEM");
 	}
 	SECTION("make_same_policy_connector without a setup: left out")
 	{
@@ -1221,6 +1227,8 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 		REQUIRE(p);
 		CHECK(p->options.tls.cert_file.empty());
 		CHECK(p->options.tls.key_file.empty());
+		CHECK(p->options.tls.cert_pem.empty());
+		CHECK(p->options.tls.key_pem.empty());
 	}
 	SECTION("make_same_policy_connector with a setup: kept")
 	{
@@ -1231,6 +1239,8 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 		REQUIRE(p);
 		CHECK(p->options.tls.cert_file == "client.pem");
 		CHECK(p->options.tls.key_file == "client.key");
+		CHECK(p->options.tls.cert_pem == "client certificate PEM");
+		CHECK(p->options.tls.key_pem == "client key PEM");
 	}
 	SECTION("make_same_policy_connector with no_bind_setup(): kept")
 	{
@@ -1241,6 +1251,8 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 		REQUIRE(p);
 		CHECK(p->options.tls.cert_file == "client.pem");
 		CHECK(p->options.tls.key_file == "client.key");
+		CHECK(p->options.tls.cert_pem == "client certificate PEM");
+		CHECK(p->options.tls.key_pem == "client key PEM");
 	}
 }
 
@@ -1250,6 +1262,8 @@ TEST_CASE("client chases: the authorizer's binding picks the setup and the clien
 	ldap::connection_options options;
 	options.tls.cert_file = "client.pem";
 	options.tls.key_file = "client.key";
+	options.tls.cert_pem = "client certificate PEM";
+	options.tls.key_pem = "client key PEM";
 	auto target = ldap::url::parse("ldaps://b.example.org/ou=b");
 	REQUIRE(target.has_value());
 	const auto setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret");
@@ -1263,6 +1277,8 @@ TEST_CASE("client chases: the authorizer's binding picks the setup and the clien
 		REQUIRE(p);
 		CHECK(p->options.tls.cert_file.empty());
 		CHECK(p->options.tls.key_file.empty());
+		CHECK(p->options.tls.cert_pem.empty());
+		CHECK(p->options.tls.key_pem.empty());
 	}
 	SECTION("same_setup: the client's setup and certificate")
 	{
@@ -1274,6 +1290,8 @@ TEST_CASE("client chases: the authorizer's binding picks the setup and the clien
 		REQUIRE(p);
 		CHECK(p->options.tls.cert_file == "client.pem");
 		CHECK(p->options.tls.key_file == "client.key");
+		CHECK(p->options.tls.cert_pem == "client certificate PEM");
+		CHECK(p->options.tls.key_pem == "client key PEM");
 	}
 	SECTION("same_setup with no setup: the certificate still, as the pooled connections have it")
 	{
