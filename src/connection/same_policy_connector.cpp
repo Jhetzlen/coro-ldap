@@ -295,7 +295,7 @@ namespace detail {
 	{
 		auto plan = connect_plan(target, origin_protected, options);
 		if (plan && !chosen.client_certificate) {
-			net::detail::clear_client_credentials(plan->options.tls);
+			net::detail::clear_client_certificate(plan->options.tls);
 		}
 		return plan;
 	}

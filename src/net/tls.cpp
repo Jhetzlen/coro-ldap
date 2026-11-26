@@ -90,39 +90,39 @@ namespace {
 
 	// A client certificate (then its chain) and key as PEM text, with the
 	// error context naming each (never the PEM itself).
-	struct client_credentials
+	struct client_certificate_pem
 	{
-		std::string_view cert_pem;
-		std::string_view key_pem;
-		std::string_view cert_what;
-		std::string_view key_what;
+		std::string_view cert;
+		std::string_view key;
+		std::string_view cert_source;
+		std::string_view key_source;
 	};
 
 	// Checks that the client certificate and key parse and belong together.
-	auto check_client_credentials(const client_credentials &c) -> result<void>
+	auto check_client_certificate(const client_certificate_pem &c) -> result<void>
 	{
 		const auto invalid = std::make_error_code(std::errc::invalid_argument);
 		const x509_ptr cert = [&] {
-			const bio_ptr bio = pem_bio(c.cert_pem);
+			const bio_ptr bio = pem_bio(c.cert);
 			return x509_ptr(bio ? PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr) : nullptr);
 		}();
 		if (!cert) {
 			ERR_clear_error();
-			return fail(invalid, std::string(c.cert_what) + ": no parseable PEM certificate");
+			return fail(invalid, std::string(c.cert_source) + ": no parseable PEM certificate");
 		}
 		const evp_pkey_ptr key = [&] {
-			const bio_ptr bio = pem_bio(c.key_pem);
+			const bio_ptr bio = pem_bio(c.key);
 			return evp_pkey_ptr(bio ? PEM_read_bio_PrivateKey(bio.get(), nullptr, no_password, nullptr) : nullptr);
 		}();
 		if (!key) {
 			ERR_clear_error();
 			return fail(
-			  invalid, std::string(c.key_what) + ": no parseable PEM private key (encrypted keys are not supported)");
+			  invalid, std::string(c.key_source) + ": no parseable PEM private key (encrypted keys are not supported)");
 		}
 		if (X509_check_private_key(cert.get(), key.get()) != 1) {
 			ERR_clear_error();
 			return fail(
-			  invalid, std::string(c.key_what) + ": does not match the certificate in " + std::string(c.cert_what));
+			  invalid, std::string(c.key_source) + ": does not match the certificate in " + std::string(c.cert_source));
 		}
 		return {};
 	}
@@ -485,19 +485,19 @@ namespace {
 
 	// Checks a PEM certificate and key, then hands them to the context.
 	// Corosio keeps its own copy of the key, which it does not wipe.
-	auto use_client_credentials(corosio::tls_context &ctx, const client_credentials &c) -> result<void>
+	auto use_client_certificate(corosio::tls_context &ctx, const client_certificate_pem &c) -> result<void>
 	{
-		if (auto r = check_client_credentials(c); !r) {
+		if (auto r = check_client_certificate(c); !r) {
 			return r;
 		}
-		if (auto r = check(ctx.use_certificate_chain(c.cert_pem), c.cert_what); !r) {
+		if (auto r = check(ctx.use_certificate_chain(c.cert), c.cert_source); !r) {
 			return r;
 		}
-		return check(ctx.use_private_key(c.key_pem, corosio::tls_file_format::pem), c.key_what);
+		return check(ctx.use_private_key(c.key, corosio::tls_file_format::pem), c.key_source);
 	}
 
 	// The client certificate and key, if any.
-	auto load_client_credentials(corosio::tls_context &ctx, const tls_options &o) -> result<void>
+	auto load_client_certificate(corosio::tls_context &ctx, const tls_options &o) -> result<void>
 	{
 		const bool files = !o.cert_file.empty() || !o.key_file.empty();
 		const bool text = !o.cert_pem.empty() || !o.key_pem.empty();
@@ -511,11 +511,8 @@ namespace {
 				return fail(std::make_error_code(std::errc::invalid_argument),
 				  "tls: cert_pem and key_pem must be given together");
 			}
-			return use_client_credentials(ctx,
-			  { .cert_pem = o.cert_pem,
-				.key_pem = o.key_pem,
-				.cert_what = "tls: cert_pem",
-				.key_what = "tls: key_pem" });
+			return use_client_certificate(ctx,
+			  { .cert = o.cert_pem, .key = o.key_pem, .cert_source = "tls: cert_pem", .key_source = "tls: key_pem" });
 		}
 		if (o.cert_file.empty() != o.key_file.empty()) {
 			return fail(
@@ -524,18 +521,18 @@ namespace {
 		if (o.cert_file.empty()) {
 			return {};
 		}
-		const std::string cert_what = "tls: cert_file " + path_text(o.cert_file);
-		const std::string key_what = "tls: key_file " + path_text(o.key_file);
+		const std::string cert_source = "tls: cert_file " + path_text(o.cert_file);
+		const std::string key_source = "tls: key_file " + path_text(o.key_file);
 		const auto cert_pem = read_file(o.cert_file);
 		if (!cert_pem) {
-			return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
+			return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_source);
 		}
 		auto key_pem = read_file(o.key_file);
 		if (!key_pem) {
-			return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_what);
+			return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_source);
 		}
-		auto r = use_client_credentials(
-		  ctx, { .cert_pem = *cert_pem, .key_pem = *key_pem, .cert_what = cert_what, .key_what = key_what });
+		auto r = use_client_certificate(
+		  ctx, { .cert = *cert_pem, .key = *key_pem, .cert_source = cert_source, .key_source = key_source });
 		// The buffer read from key_file is ours to wipe; Corosio's copy is not wiped.
 		OPENSSL_cleanse(key_pem->data(), key_pem->size());
 		return r;
@@ -576,8 +573,8 @@ auto prime_corosio_openssl() noexcept -> bool
 	}
 }
 
-// Every field load_client_credentials() reads.
-void clear_client_credentials(tls_options &o) noexcept
+// Every field load_client_certificate() reads.
+void clear_client_certificate(tls_options &o) noexcept
 {
 	o.cert_file.clear();
 	o.key_file.clear();
@@ -624,7 +621,7 @@ auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 		});
 	}
 
-	if (auto r = load_client_credentials(ctx, o); !r) {
+	if (auto r = load_client_certificate(ctx, o); !r) {
 		return std::unexpected(std::move(r.error()));
 	}
 	return setup;

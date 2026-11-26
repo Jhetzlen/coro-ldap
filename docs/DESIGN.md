@@ -3549,8 +3549,8 @@ and read through `detail::lease_access`.
   certificate (`tls.cert_file` / `key_file` or `tls.cert_pem` /
   `key_pem`) included, which an `anonymous` connection does not present
   (`referral_identity::client_certificate`, applied by
-  `detail::referral_plan` through `net::detail::clear_client_credentials`,
-  which drops every client credential field), since a
+  `detail::referral_plan` through `net::detail::clear_client_certificate`,
+  which drops every client certificate field), since a
   server may authenticate a TLS connection by its certificate alone
   (mutual TLS, certificate mapping, SASL EXTERNAL); the mapping is
   `detail::client_referral_identity`. `make_same_policy_connector` follows the same rule with its own setup
