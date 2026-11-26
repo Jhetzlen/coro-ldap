@@ -348,7 +348,9 @@ itself needs only ICU.
     (OpenSSL's `SSL_CERT_FILE` / `SSL_CERT_DIR`; on Windows CryptoAPI,
     which blocks the io_context's thread during the handshake, its
     revocation fetches bounded by the timeout, at most 20 s);
-    `cert_file` and `key_file` go together; `server_name` (default the
+    `cert_file` and `key_file` go together, or else `cert_pem` and
+    `key_pem` (PEM text, e.g. from a PKCS#12 file or a platform store;
+    the key unencrypted), not both; `server_name` (default the
     URL's host) rejects control characters, and a trailing dot is dropped
     before SNI and matching. Not allocator-aware.
   - The connect task must run on `ioc`'s executor, its continuations not

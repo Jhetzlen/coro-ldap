@@ -1343,6 +1343,41 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 		CHECK_THAT(client.get(), IsEmpty());
 		CHECK_THAT(server.get(), IsEmpty());
 	}
+	SECTION("presented, as PEM text")
+	{
+		spawn(ioc, accept_and_serve(srv.acc, ctx), server);
+		spawn(ioc,
+		  exchange(ioc,
+			srv.url("ldaps"),
+			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
+				.cert_pem = std::pmr::string(client_leaf.cert_pem),
+				.key_pem = std::pmr::string(client_leaf.key_pem) } },
+			true),
+		  client);
+		drive(ioc);
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
+	}
+	SECTION("refused before connecting: files and PEM text together, or half of the PEM pair")
+	{
+		auto both = connect_to(ioc,
+		  srv.url("ldaps"),
+		  { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
+			  .cert_file = cert.path(),
+			  .key_file = key.path(),
+			  .cert_pem = std::pmr::string(client_leaf.cert_pem),
+			  .key_pem = std::pmr::string(client_leaf.key_pem) } });
+		REQUIRE_FALSE(both.has_value());
+		CHECK(both.error().code == std::errc::invalid_argument);
+		CHECK_THAT(std::string(both.error().context), ContainsSubstring("not both"));
+		auto half = connect_to(ioc,
+		  srv.url("ldaps"),
+		  { .tls = {
+			  .ca_pem = std::pmr::string(pki().ca_pem()), .cert_pem = std::pmr::string(client_leaf.cert_pem) } });
+		REQUIRE_FALSE(half.has_value());
+		CHECK(half.error().code == std::errc::invalid_argument);
+		CHECK_THAT(std::string(half.error().context), ContainsSubstring("cert_pem and key_pem must be given together"));
+	}
 	SECTION("missing")
 	{
 		spawn(ioc, accept_and_serve(srv.acc, ctx), server);

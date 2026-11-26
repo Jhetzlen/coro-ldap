@@ -13,6 +13,7 @@
 #include <boost/corosio/openssl_stream.hpp>
 
 #include <openssl/bio.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -475,9 +476,44 @@ namespace {
 		return {};
 	}
 
+	// Checks a PEM certificate and key, then hands them to the context.
+	// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+	auto use_client_credentials(corosio::tls_context &ctx,
+	  const std::string &cert_pem,
+	  const std::string &key_pem,
+	  const std::string &cert_what,
+	  const std::string &key_what) -> result<void>
+	// NOLINTEND(bugprone-easily-swappable-parameters)
+	{
+		if (auto r = check_client_credentials(cert_pem, key_pem, cert_what, key_what); !r) {
+			return r;
+		}
+		if (auto r = check(ctx.use_certificate_chain(cert_pem), cert_what); !r) {
+			return r;
+		}
+		return check(ctx.use_private_key(key_pem, corosio::tls_file_format::pem), key_what);
+	}
+
 	// The client certificate and key, if any.
 	auto load_client_credentials(corosio::tls_context &ctx, const tls_options &o) -> result<void>
 	{
+		const bool files = !o.cert_file.empty() || !o.key_file.empty();
+		const bool text = !o.cert_pem.empty() || !o.key_pem.empty();
+		if (files && text) {
+			return fail(std::make_error_code(std::errc::invalid_argument),
+			  "tls: the client certificate comes from cert_file and key_file or from cert_pem and key_pem, not both");
+		}
+		if (text) {
+			if (o.cert_pem.empty() != o.key_pem.empty()) {
+				return fail(std::make_error_code(std::errc::invalid_argument),
+				  "tls: cert_pem and key_pem must be given together");
+			}
+			// Corosio takes std::string; the key copy is wiped once used.
+			std::string key(o.key_pem);
+			auto r = use_client_credentials(ctx, std::string(o.cert_pem), key, "tls: cert_pem", "tls: key_pem");
+			OPENSSL_cleanse(key.data(), key.size());
+			return r;
+		}
 		if (o.cert_file.empty() != o.key_file.empty()) {
 			return fail(
 			  std::make_error_code(std::errc::invalid_argument), "tls: cert_file and key_file must be given together");
@@ -491,17 +527,13 @@ namespace {
 		if (!cert_pem) {
 			return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
 		}
-		const auto key_pem = read_file(o.key_file);
+		auto key_pem = read_file(o.key_file);
 		if (!key_pem) {
 			return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_what);
 		}
-		if (auto r = check_client_credentials(*cert_pem, *key_pem, cert_what, key_what); !r) {
-			return r;
-		}
-		if (auto r = check(ctx.use_certificate_chain(*cert_pem), cert_what); !r) {
-			return r;
-		}
-		return check(ctx.use_private_key(*key_pem, corosio::tls_file_format::pem), key_what);
+		auto r = use_client_credentials(ctx, *cert_pem, *key_pem, cert_what, key_what);
+		OPENSSL_cleanse(key_pem->data(), key_pem->size());
+		return r;
 	}
 
 }// namespace
