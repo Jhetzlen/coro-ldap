@@ -551,7 +551,7 @@ TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")
 		CHECK(referrals[0].get_allocator().resource() == &arena);
 		CHECK(referrals[0].attributes()[0].get_allocator().resource() == &arena);
 	}
-	CHECK(counting.outstanding() == 0);// everything was given back
+	CHECK(counting.outstanding_count() == 0);// everything was given back
 }
 
 TEST_CASE("URL parsing into a monotonic buffer", "[url][pmr]")

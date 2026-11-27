@@ -122,8 +122,8 @@ struct recorder final : ldap::client_observer
 		switch (o) {
 		case ldap::referral_outcome::followed:
 			return "followed";
-		case ldap::referral_outcome::skipped_policy:
-			return "skipped_policy";
+		case ldap::referral_outcome::refused:
+			return "refused";
 		case ldap::referral_outcome::skipped_loop:
 			return "skipped_loop";
 		case ldap::referral_outcome::limit_reached:
@@ -331,7 +331,7 @@ TEST_CASE("client: fails over to the next server", "[net][client][failover]")
 	REQUIRE(l.has_value());
 	CHECK(text(l->server()) == text(up.url()));
 	CHECK((*l)->is_open());
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 	REQUIRE(up.accepted() == 1);
 	REQUIRE(up.log(0).received.size() == 1);
 	CHECK(std::get<ldap::bind_request>(up.log(0).received[0].op).name == admin);
@@ -344,7 +344,7 @@ TEST_CASE("client: fails over to the next server", "[net][client][failover]")
 	// The lease works like a connection.
 	l->release();
 	CHECK_FALSE(static_cast<bool>(*l));
-	CHECK(f.pool->connections() == 1);// pooled again
+	CHECK(f.pool->connection_count() == 1);// pooled again
 }
 
 TEST_CASE("client: a failed server waits out its backoff", "[net][client][backoff]")
@@ -383,7 +383,7 @@ TEST_CASE("client: a failed server waits out its backoff", "[net][client][backof
 		CHECK(text(first->server()) == text(b.url()));
 		full(*first).close();// its connection ends: the next acquire opens another
 		f.release(*first);
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 		auto second = f.acquire();
 		REQUIRE(second.has_value());
 		CHECK(text(second->server()) == text(b.url()));
@@ -414,7 +414,7 @@ TEST_CASE("client: the session setup runs again on a new connection", "[net][cli
 {
 	pool_fixture f;
 	auto &s = f.server({ bind_ok(), bind_ok() });
-	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = std::nullopt, .observer = &f.obs });
 	auto l = f.acquire();
 	REQUIRE(l.has_value());
 	l->release();
@@ -426,7 +426,7 @@ TEST_CASE("client: the session setup runs again on a new connection", "[net][cli
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::cond::connection_lost);
 	f.release(*stale);// closed: leaves the pool
-	CHECK(f.pool->connections() == 0);
+	CHECK(f.pool->connection_count() == 0);
 
 	auto fresh = f.acquire();
 	REQUIRE(fresh.has_value());
@@ -534,7 +534,8 @@ TEST_CASE("client: the idle check", "[net][client][probe]")
 	{
 		pool_fixture f;
 		auto &s = f.server({ bind_ok(), bind_ok() });
-		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = milliseconds(0), .observer = &f.obs });
+		f.make(
+		  { .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = milliseconds(0), .observer = &f.obs });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		l->release();
@@ -543,7 +544,7 @@ TEST_CASE("client: the idle check", "[net][client][probe]")
 		REQUIRE(again.has_value());
 		CHECK((*again)->is_open());
 		CHECK(s.accepted() == 2);
-		CHECK(f.pool->connections() == 1);
+		CHECK(f.pool->connection_count() == 1);
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 				"probe " + text(s.url()) + " failed",
@@ -554,7 +555,8 @@ TEST_CASE("client: the idle check", "[net][client][probe]")
 	{
 		pool_fixture f;
 		auto &s = f.server({ { answer({ bind_resp(1) }), answer({ done_msg(2) }) } });
-		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = milliseconds(0), .observer = &f.obs });
+		f.make(
+		  { .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = milliseconds(0), .observer = &f.obs });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		const ldap::connection *first = conn_of(*l);
@@ -575,7 +577,7 @@ TEST_CASE("client: the idle check", "[net][client][probe]")
 	{
 		pool_fixture f;
 		auto &s = f.server({ { answer({ bind_resp(1) }), answer({ done_msg(2, 50) }) } });
-		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = milliseconds(0) });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = milliseconds(0) });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		const ldap::connection *first = conn_of(*l);
@@ -588,7 +590,7 @@ TEST_CASE("client: the idle check", "[net][client][probe]")
 	{
 		pool_fixture f;
 		auto &s = f.server({ bind_ok() });
-		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = milliseconds(3'600'000) });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = milliseconds(3'600'000) });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		l->release();
@@ -611,7 +613,7 @@ TEST_CASE("client: max_connections", "[net][client][pool]")
 		REQUIRE(b.has_value());
 		CHECK(conn_of(*a) == conn_of(*b));
 		CHECK(s.accepted() == 1);
-		CHECK(f.pool->connections() == 1);
+		CHECK(f.pool->connection_count() == 1);
 	}
 	SECTION("new connections before sharing, up to the limit; idle ones first")
 	{
@@ -627,7 +629,7 @@ TEST_CASE("client: max_connections", "[net][client][pool]")
 		CHECK(conn_of(*a) != conn_of(*b));
 		CHECK((conn_of(*c) == conn_of(*a) || conn_of(*c) == conn_of(*b)));
 		CHECK(s.accepted() == 2);
-		CHECK(f.pool->connections() == 2);
+		CHECK(f.pool->connection_count() == 2);
 		const ldap::connection *idle = (conn_of(*c) == conn_of(*a)) ? conn_of(*b) : conn_of(*a);
 		(conn_of(*c) == conn_of(*a) ? *b : *a).release();
 		auto d = f.acquire();
@@ -696,7 +698,7 @@ TEST_CASE("client: connections are not pooled again after", "[net][client][pool]
 		REQUIRE(finish(f.ioc, (*l)->simple_bind(ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" }, "pw")).has_value());
 		CHECK(l->get().bind_count() == 2);
 		f.release(*l);
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 		CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " rebound");
 		// It is unbound, not just closed.
 		drive_until(f.ioc, [&s] { return s.session(0).done(); });
@@ -715,7 +717,7 @@ TEST_CASE("client: connections are not pooled again after", "[net][client][pool]
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		f.release(*l);
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 		CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " max_lifetime");
 		drive_until(f.ioc, [&s] { return s.session(0).done(); });
 		CHECK(s.log(0).error.empty());
@@ -732,7 +734,7 @@ TEST_CASE("client: back to the primary after failback_after", "[net][client][fai
 	auto &secondary = f.server({ bind_ok() });
 	f.make({ .servers = { primary.url(), secondary.url() },
 	  .setup = admin_setup(),
-	  .idle_check = std::nullopt,
+	  .probe_idle_after = std::nullopt,
 	  .backoff = { .initial = milliseconds(30), .max = milliseconds(30) },
 	  .failback_after = milliseconds(0),
 	  .observer = &f.obs });
@@ -745,7 +747,7 @@ TEST_CASE("client: back to the primary after failback_after", "[net][client][fai
 	REQUIRE(back.has_value());
 	CHECK(text(back->server()) == text(primary.url()));
 	CHECK(primary.accepted() == 2);
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 	CHECK(f.obs.events
 		  == std::vector<std::string>{ "connect " + text(primary.url()) + " failed",
 			"retry " + text(primary.url()) + " 30ms",
@@ -763,7 +765,7 @@ TEST_CASE("client: close()", "[net][client]")
 	REQUIRE(l.has_value());
 	f.close();
 	CHECK_FALSE((*l)->is_open());// leased connections are closed too
-	CHECK(f.pool->connections() == 0);
+	CHECK(f.pool->connection_count() == 0);
 	CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " client_closed");
 	auto after = f.acquire();
 	REQUIRE_FALSE(after.has_value());
@@ -815,9 +817,9 @@ TEST_CASE("client: destroyed after io_context::run() returned", "[net][client][c
 	corosio::io_context ioc;
 	const corosio::tcp_acceptor listener(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8);
 	auto pool = pool_after_run(ioc, listener, &mr);
-	REQUIRE(pool->connections() == 1);
+	REQUIRE(pool->connection_count() == 1);
 	pool.reset();
-	CHECK(mr.outstanding() == 0);// freed now, not by a task
+	CHECK(mr.outstanding_count() == 0);// freed now, not by a task
 	ioc.restart();
 	CHECK(ioc.poll() == 0);// no work left on the io_context
 }
@@ -831,12 +833,12 @@ TEST_CASE("client: an unbind posted to an io_context that never runs again", "[n
 		corosio::io_context ioc;
 		const corosio::tcp_acceptor listener(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8);
 		auto pool = pool_after_run(ioc, listener, &mr);
-		REQUIRE(pool->connections() == 1);
+		REQUIRE(pool->connection_count() == 1);
 		ioc.restart();
 		pool.reset();
-		CHECK(mr.outstanding() != 0);// held by the posted task
+		CHECK(mr.outstanding_count() != 0);// held by the posted task
 	}
-	CHECK(mr.outstanding() == 0);
+	CHECK(mr.outstanding_count() == 0);
 }
 
 TEST_CASE("client: a connection whose identity changed is not shared", "[net][client][identity]")
@@ -1264,9 +1266,9 @@ TEST_CASE("client: max_lifetime under load", "[net][client][pool]")
 	REQUIRE(b.has_value());
 	CHECK(conn_of(*b) != conn_of(*a));
 	CHECK(s.accepted() == 2);
-	CHECK(f.pool->connections() == 2);// the old one drains
+	CHECK(f.pool->connection_count() == 2);// the old one drains
 	f.release(*a);
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 	CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " max_lifetime");
 }
 
@@ -1278,7 +1280,7 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, bind_ok() });// reads the probe, never answers
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
-		  .idle_check = milliseconds(0),
+		  .probe_idle_after = milliseconds(0),
 		  .probe_timeout = milliseconds(50),
 		  .acquire_timeout = milliseconds(10'000),
 		  .observer = &f.obs });
@@ -1302,7 +1304,7 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, bind_ok() });
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
-		  .idle_check = milliseconds(0),
+		  .probe_idle_after = milliseconds(0),
 		  .probe_timeout = milliseconds(5'000),
 		  .acquire_timeout = milliseconds(200),
 		  .observer = &f.obs });
@@ -1316,7 +1318,7 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 		REQUIRE_FALSE(again.get().has_value());
 		CHECK(again.get().error().code == ldap::cond::timeout);
 		CHECK(s.accepted() == 1);
-		CHECK(f.pool->connections() == 1);// unknown, not dead: it stays
+		CHECK(f.pool->connection_count() == 1);// unknown, not dead: it stays
 		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
 	}
 	SECTION("a probe that had most of acquire_timeout and got no answer fails")
@@ -1325,7 +1327,7 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 		auto &s = f.server({ { answer({ bind_resp(1) }), step{} } });
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
-		  .idle_check = milliseconds(0),
+		  .probe_idle_after = milliseconds(0),
 		  .probe_timeout = milliseconds(5'000),
 		  .acquire_timeout = milliseconds(400),
 		  .observer = &f.obs });
@@ -1333,7 +1335,7 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 		REQUIRE(l.has_value());
 		l->release();
 		REQUIRE_FALSE(f.acquire().has_value());// the probe begins at once
-		CHECK(f.pool->connections() == 0);// replaced by the next acquire
+		CHECK(f.pool->connection_count() == 0);// replaced by the next acquire
 		REQUIRE(f.obs.events.size() >= 3);
 		CHECK(f.obs.events[1] == "probe " + text(s.url()) + " failed");
 		CHECK(f.obs.events[2] == "disconnect " + text(s.url()) + " probe_failed");
@@ -1552,7 +1554,8 @@ TEST_CASE("client: acquire() stopped by its stop token", "[net][client][cancel]"
 	{
 		pool_fixture f;
 		auto &s = f.server({ { answer({ bind_resp(1) }), step{} } });
-		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = milliseconds(0), .observer = &f.obs });
+		f.make(
+		  { .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = milliseconds(0), .observer = &f.obs });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		l->release();
@@ -1564,7 +1567,7 @@ TEST_CASE("client: acquire() stopped by its stop token", "[net][client][cancel]"
 		drive_until(f.ioc, [&a] { return a.done(); });
 		REQUIRE_FALSE(a.get().has_value());
 		CHECK(a.get().error().code == ldap::cond::canceled);
-		CHECK(f.pool->connections() == 1);// the connection stays
+		CHECK(f.pool->connection_count() == 1);// the connection stays
 		CHECK(f.obs.events.back() == "probe " + text(s.url()) + " failed");
 	}
 	SECTION("while waiting for a backoff")
@@ -1672,7 +1675,7 @@ TEST_CASE("client: no observer hook after close()", "[net][client][close]")
 		auto l = f.acquire();
 		REQUIRE_FALSE(l.has_value());
 		CHECK(l.error().code == ldap::client_errc::not_connected);
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 		CHECK(obs.calls == 2);// on_connect, and close()'s on_disconnect
 	}
 	SECTION("a waiting acquire() ends after close() without calling on_acquire_wait")
@@ -1749,7 +1752,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 				"disconnect " + text(s.url()) + " closed",
 				"connect " + text(s.url()) + " ok" });
-		CHECK(f.pool->connections() == 1);// the lease returned
+		CHECK(f.pool->connection_count() == 1);// the lease returned
 	}
 	SECTION("compare(): the server is busy")
 	{
@@ -1759,7 +1762,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(s.accepted() == 2);// another connection, although the first stayed open
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
@@ -1775,11 +1778,11 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(r->diagnostic_message == "cached");
 		REQUIRE(r->controls.size() == 1);
 		CHECK(r->controls[0].type == "1.2.3.4");
-		CHECK(r->referrals.empty());
+		CHECK(r->referral_attempts.empty());
 	}
 	SECTION("compare(): busy on the first server, the retry goes to the second")
 	{
@@ -1789,7 +1792,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { a.url(), b.url() }, .setup = admin_setup(), .max_connections = 2, .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(a.accepted() == 1);
 		CHECK(b.accepted() == 1);
 		CHECK(f.obs.events
@@ -1815,7 +1818,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { a.url(), down }, .setup = admin_setup(), .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(a.accepted() == 2);
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
@@ -1833,7 +1836,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { a.url(), down },
 		  .setup = admin_setup(),
 		  .max_connections = 2,
-		  .idle_check = std::nullopt,
+		  .probe_idle_after = std::nullopt,
 		  .observer = &f.obs });
 		auto first = f.acquire_exclusive();
 		auto second = f.acquire_exclusive();
@@ -1844,7 +1847,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		second->release();// the most recently used: compare() takes it
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(a.accepted() == 2);// the retry took the idle first connection, opened none
 		CHECK(a.log(0).received.size() == 2);// the bind, the compare
 		CHECK(f.obs.events
@@ -1864,7 +1867,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { a.url(), b.url() },
 		  .setup = admin_setup(),
 		  .max_connections = 3,
-		  .idle_check = std::nullopt,
+		  .probe_idle_after = std::nullopt,
 		  .observer = &f.obs });
 		// The first compare() leaves an idle connection to the second server.
 		REQUIRE(finish(f.ioc, f.pool->compare(jdoe_compare())).has_value());
@@ -1879,7 +1882,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.obs.events.clear();
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));// the first server's, preferred
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(a.accepted() == 2);
 		CHECK(b.accepted() == 1);// no new connection
 		CHECK(b.log(0).received.size() == 3);// the bind, both compares
@@ -1896,8 +1899,10 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 							   answer({ compare_msg(2, 51), bind_resp(3) }) },
 		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
 		const auto other = f.refused_url();
-		f.make(
-		  { .servers = { a.url(), other }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+		f.make({ .servers = { a.url(), other },
+		  .setup = admin_setup(),
+		  .probe_idle_after = std::nullopt,
+		  .observer = &f.obs });
 		auto mine = f.acquire();
 		REQUIRE(mine.has_value());
 		outcome<ldap::result<ldap::compare_result>> compared;
@@ -1913,7 +1918,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		REQUIRE(opener.get().has_value());
 		CHECK(text(opener.get()->server()) == text(a.url()));
 		REQUIRE(compared.get().has_value());
-		CHECK(compared.get()->value);
+		CHECK(compared.get()->matched);
 		CHECK(a.accepted() == 2);
 		CHECK(a.log(1).received.size() == 2);// the bind, the retried compare
 		CHECK(f.obs.events
@@ -1929,7 +1934,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { a.url(), b.url(), c },
 		  .setup = admin_setup(),
 		  .max_connections = 2,
-		  .idle_check = std::nullopt,
+		  .probe_idle_after = std::nullopt,
 		  .backoff = { .initial = milliseconds(50), .max = milliseconds(1000) },
 		  .observer = &f.obs });
 		REQUIRE(f.acquire().has_value());// the first server fails: to the second, then idle
@@ -1937,7 +1942,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.obs.events.clear();
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(a.accepted() == 2);
 		CHECK(b.accepted() == 2);
 		CHECK(f.obs.events
@@ -2212,8 +2217,8 @@ TEST_CASE("client: referrals are not chased by default", "[net][client][referral
 	CHECK(refs->references == ldap::string_list{ ref_to(b, "ou=b,dc=example,dc=org") });
 
 	CHECK_FALSE(refs->is_complete());
-	CHECK(refs->unlisted == 0);
-	CHECK(refs->referrals.empty());
+	CHECK(refs->unlisted_attempts == 0);
+	CHECK(refs->referral_attempts.empty());
 
 	// A request's follow_referrals turns chasing on for it: the reference
 	// is counted (follow_references is off), not followed.
@@ -2223,8 +2228,8 @@ TEST_CASE("client: referrals are not chased by default", "[net][client][referral
 	REQUIRE(chased.has_value());
 	CHECK(chased->entries.size() == 1);
 	CHECK_FALSE(chased->is_complete());
-	CHECK(chased->unlisted == 1);
-	CHECK(chased->referrals.empty());
+	CHECK(chased->unlisted_attempts == 1);
+	CHECK(chased->referral_attempts.empty());
 
 	CHECK(b.accepted() == 0);
 	CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(a.url()) + " ok" });
@@ -2256,7 +2261,7 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
 				"referral " + text(a.url()) + " " + std::string(uri) + " followed" });
-		CHECK(f.pool->connections() == 1);// the referred connection is not pooled
+		CHECK(f.pool->connection_count() == 1);// the referred connection is not pooled
 	}
 	SECTION("search(): the request's follow_referrals turns it off")
 	{
@@ -2282,14 +2287,14 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		  answer({ compare_referral(2, ref_to(b, "uid=jdoe,ou=b,dc=example,dc=org")) }) } });
 		f.make({ .servers = { a.url() },
 		  .setup = admin_setup(),
-		  .referrals = { .authorize = [](const ldap::referral_hop &) { return ldap::referral_binding::anonymous; } } });
+		  .referrals = { .authorize = [](const ldap::referral_hop &) { return ldap::referral_access::anonymous; } } });
 		auto request = jdoe_compare();
 		request.follow_referrals = true;
 		auto r = finish(f.ioc, f.pool->compare(request));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
-		REQUIRE(r->referrals.size() == 1);
-		CHECK(r->referrals[0].outcome == ldap::referral_outcome::followed);
+		CHECK(r->matched);
+		REQUIRE(r->referral_attempts.size() == 1);
+		CHECK(r->referral_attempts[0].outcome == ldap::referral_outcome::followed);
 		CHECK(b.accepted() == 1);
 	}
 	SECTION("compare(): the request's follow_referrals turns it off")
@@ -2301,7 +2306,7 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		f.make({ .servers = { a.url() },
 		  .setup = admin_setup(),
 		  .referrals = { .follow_referrals = true,
-			.authorize = [](const ldap::referral_hop &) { return ldap::referral_binding::anonymous; } } });
+			.authorize = [](const ldap::referral_hop &) { return ldap::referral_access::anonymous; } } });
 		auto request = jdoe_compare();
 		request.follow_referrals = false;
 		auto r = finish(f.ioc, f.pool->compare(request));
@@ -2320,13 +2325,13 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		  .setup = admin_setup(),
 		  .referrals = { .follow_referrals = true, .authorize = [&asked](const ldap::referral_hop &hop) {
 							asked.push_back(hop);
-							return ldap::referral_binding::anonymous;
+							return ldap::referral_access::anonymous;
 						} } });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
-		REQUIRE(r->referrals.size() == 1);
-		CHECK(r->referrals[0].outcome == ldap::referral_outcome::followed);
+		CHECK(r->matched);
+		REQUIRE(r->referral_attempts.size() == 1);
+		CHECK(r->referral_attempts[0].outcome == ldap::referral_outcome::followed);
 		REQUIRE(asked.size() == 1);
 		CHECK(text(asked[0].origin) == text(a.url()));
 		CHECK(asked[0].depth == 1);
@@ -2346,10 +2351,9 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::errc::referral);
-		CHECK_THAT(std::string(r.error().context), ContainsSubstring("1 skipped_policy"));
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("1 refused"));
 		CHECK(b.accepted() == 0);
-		CHECK(f.obs.events.back()
-			  == "referral " + text(a.url()) + " " + std::string(ref_to(b, "ou=b")) + " skipped_policy");
+		CHECK(f.obs.events.back() == "referral " + text(a.url()) + " " + std::string(ref_to(b, "ou=b")) + " refused");
 	}
 	SECTION("without an authorizer nothing is contacted")
 	{
@@ -2372,7 +2376,7 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		  .setup = admin_setup(),
 		  .referrals = { .follow_referrals = true, .authorize = [&asked](const ldap::referral_hop &) {
 							++asked;
-							return ldap::referral_binding::same_setup;
+							return ldap::referral_access::same_setup;
 						} } });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE_FALSE(r.has_value());
@@ -2399,8 +2403,8 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		CHECK(r->is_complete());
 		REQUIRE(r->entries.size() == 2);
 		CHECK(r->entries[1] == expected_entry(b_dn, "B"));
-		REQUIRE(r->referrals.size() == 1);
-		CHECK(r->referrals[0].kind == ldap::reference_kind::continuation_reference);
+		REQUIRE(r->referral_attempts.size() == 1);
+		CHECK(r->referral_attempts[0].kind == ldap::reference_kind::continuation_reference);
 	}
 	SECTION("references only: a referral result stays an error")
 	{
@@ -2431,7 +2435,7 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		REQUIRE(r.has_value());
 		CHECK(r->entries.size() == 1);
 		CHECK_FALSE(r->is_complete());
-		CHECK(r->unlisted == 2);
+		CHECK(r->unlisted_attempts == 2);
 		CHECK(r->references
 			  == ldap::string_list{ ref_to(b, "ou=b,dc=example,dc=org"), ref_to(b, "ou=c,dc=example,dc=org") });
 		CHECK(b.accepted() == 0);
@@ -2530,7 +2534,7 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		CHECK(r->entries.size() == 1);
 		CHECK(r->references == ldap::string_list{ "ldap://elsewhere.example/ou=b,dc=example,dc=org" });
 		CHECK(f.obs.events.back()
-			  == "referral " + text(a.url()) + " ldap://elsewhere.example/ou=b,dc=example,dc=org skipped_policy");
+			  == "referral " + text(a.url()) + " ldap://elsewhere.example/ou=b,dc=example,dc=org refused");
 	}
 	SECTION("the limits apply")
 	{
@@ -2546,8 +2550,8 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->is_complete());
-		REQUIRE(r->referrals.size() == 1);
-		CHECK(r->referrals[0].outcome == ldap::referral_outcome::limit_reached);
+		REQUIRE(r->referral_attempts.size() == 1);
+		CHECK(r->referral_attempts[0].outcome == ldap::referral_outcome::limit_reached);
 		CHECK(b.accepted() == 0);
 	}
 }
@@ -2585,7 +2589,7 @@ TEST_CASE("client: referrals and the read forwarders' retry", "[net][client][ref
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("1 failed"));
 		CHECK(a.accepted() == 1);
 		CHECK(b.accepted() == 1);
-		CHECK(f.pool->connections() == 1);// not retired: it answered
+		CHECK(f.pool->connection_count() == 1);// not retired: it answered
 		CHECK(f.obs.events.front() == "connect " + text(a.url()) + " ok");
 		CHECK(std::ranges::none_of(f.obs.events, [](const std::string &e) { return e.starts_with("disconnect"); }));
 	}
@@ -2600,7 +2604,7 @@ TEST_CASE("client: an authorizer's exception propagates", "[net][client][referra
 	  answer({ compare_msg(3, 6) }) } });
 	f.make({ .servers = { a.url() },
 	  .setup = admin_setup(),
-	  .referrals = { .follow_referrals = true, .authorize = [](const ldap::referral_hop &) -> ldap::referral_binding {
+	  .referrals = { .follow_referrals = true, .authorize = [](const ldap::referral_hop &) -> ldap::referral_access {
 						throw std::runtime_error("authorizer");
 					} } });
 	CHECK_THROWS_AS(finish(f.ioc, f.pool->search(people_search())), std::runtime_error);
@@ -2608,9 +2612,9 @@ TEST_CASE("client: an authorizer's exception propagates", "[net][client][referra
 	// The lease came back, its connection still pooled and usable.
 	auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 	REQUIRE(r.has_value());
-	CHECK(r->value);
+	CHECK(r->matched);
 	CHECK(a.accepted() == 1);
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 }
 
 TEST_CASE("client: one referred connection per server and binding", "[net][client][referral]")
@@ -2630,8 +2634,8 @@ TEST_CASE("client: one referred connection per server and binding", "[net][clien
 	  .setup = admin_setup(),
 	  .referrals = { .follow_references = true, .authorize = [](const ldap::referral_hop &hop) {
 						return hop.target.base_dn() == ldap::dn{ "ou=c,dc=example,dc=org" }
-								 ? ldap::referral_binding::same_setup
-								 : ldap::referral_binding::anonymous;
+								 ? ldap::referral_access::same_setup
+								 : ldap::referral_access::anonymous;
 					} } });
 	auto r = finish(f.ioc, f.pool->search(people_search()));
 	REQUIRE(r.has_value());
@@ -2666,7 +2670,7 @@ TEST_CASE("client: close() stops a chase", "[net][client][referral][close]")
 			if (close_when_asked) {
 				f.pool->close();
 			}
-			return ldap::referral_binding::same_setup;
+			return ldap::referral_access::same_setup;
 		} } });
 	outcome<ldap::result<ldap::search_result>> r;
 	SECTION("while a referred server is being set up")
@@ -2702,8 +2706,8 @@ TEST_CASE("client: same_setup_for_domains", "[net][client][referral]")
 		return ldap::referral_hop{ .target = *t, .origin = *o };
 	};
 	const auto authorize = ldap::same_setup_for_domains({ "example.org", "10.0.0.1:1389" });
-	const auto same = ldap::referral_binding::same_setup;
-	const auto refuse = ldap::referral_binding::refuse;
+	const auto same = ldap::referral_access::same_setup;
+	const auto refuse = ldap::referral_access::refuse;
 	CHECK(authorize(hop("ldap://example.org/ou=b", "ldap://a.example.org")) == same);
 	CHECK(authorize(hop("ldaps://ldap.eu.example.org/ou=b", "ldap://a.example.org")) == same);
 	CHECK(authorize(hop("ldap://badexample.org/ou=b", "ldap://a.example.org")) == refuse);
@@ -2726,8 +2730,8 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	ldap::client other(f.ioc, {});
 	other = std::move(*f.pool);// takes the pool and its connection
 	CHECK(other.executor().get_inner_executor() == f.ioc.get_executor());
-	CHECK(other.connections() == 1);
-	CHECK(f.pool->connections() == 0);
+	CHECK(other.connection_count() == 1);
+	CHECK(f.pool->connection_count() == 0);
 
 	// The moved-from client refuses every read without contacting anything.
 	const auto refused = [](const ldap::error &e, std::string_view context) {
@@ -2758,7 +2762,7 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	// Assigned over, a client is closed first, as by its destructor.
 	run_on(f.ioc, other.executor(), [&] { other = ldap::client(f.ioc, {}); });
 	CHECK_FALSE((*l)->is_open());
-	CHECK(other.connections() == 0);
+	CHECK(other.connection_count() == 0);
 	CHECK(f.obs.events
 		  == std::vector<std::string>{
 			"connect " + text(s.url()) + " ok", "disconnect " + text(s.url()) + " client_closed" });
@@ -2788,7 +2792,7 @@ TEST_CASE("client: a shared connection being unbound is not handed out", "[net][
 	pool_fixture f;
 	auto &s = f.server({ { answer({ bind_resp(1) }), step{ .read_request = true, .replies = {}, .close_after = true } },
 	  found_after_bind() });
-	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = std::nullopt, .observer = &f.obs });
 	auto mine = f.acquire();
 	REQUIRE(mine.has_value());
 	outcome<ldap::result<void>> unbound;
@@ -2807,7 +2811,7 @@ TEST_CASE("client: a shared connection being unbound is not handed out", "[net][
 	REQUIRE(s.log(0).received.size() == 2);
 	CHECK(std::holds_alternative<ldap::unbind_request>(s.log(0).received[1].op));
 	f.release(*mine);
-	CHECK(f.pool->connections() == 1);// the new one only
+	CHECK(f.pool->connection_count() == 1);// the new one only
 	CHECK(f.obs.events
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 			"connect " + text(s.url()) + " ok",
@@ -2827,14 +2831,15 @@ TEST_CASE("client: search_stream() failing before its first message", "[net][cli
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::encode_error);
 		CHECK(s.accepted() == 1);
-		CHECK(f.pool->connections() == 1);// still pooled
+		CHECK(f.pool->connection_count() == 1);// still pooled
 		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
 	}
 	SECTION("retried on another connection when the idle one was reset by the server")
 	{
 		pool_fixture f;
 		auto &s = f.server({ bind_ok(), found_after_bind() });
-		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+		f.make(
+		  { .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = std::nullopt, .observer = &f.obs });
 		REQUIRE(f.acquire().has_value());// pooled, then returned
 		s.reset(0);// the client cannot tell yet
 		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
@@ -2872,7 +2877,7 @@ TEST_CASE("client: an observer overriding only on_connect", "[net][client][obser
 	connects_only obs;
 	f.make({ .servers = { down, a.url() },
 	  .setup = admin_setup(),
-	  .idle_check = milliseconds(0),
+	  .probe_idle_after = milliseconds(0),
 	  .acquire_timeout = milliseconds(10'000),
 	  .backoff = { .initial = milliseconds(60'000), .max = milliseconds(60'000) },
 	  .observer = &obs,
@@ -2896,7 +2901,7 @@ TEST_CASE("client: an observer overriding only on_connect", "[net][client][obser
 	CHECK(r->entries.front() == expected_entry(b_dn, "B"));
 	f.release(*waiting.get());
 	f.close();// on_disconnect
-	CHECK(f.pool->connections() == 0);
+	CHECK(f.pool->connection_count() == 0);
 	CHECK(obs.events
 		  == std::vector<std::string>{ "connect " + text(down) + " failed", "connect " + text(a.url()) + " ok" });
 	REQUIRE(a.log(0).received.size() == 3);
@@ -2974,7 +2979,7 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 	CHECK(x->value == "answer");
 	CHECK(finish(f.ioc, ldap::who_am_i(*f.pool)) == "dn:cn=me");
 	CHECK(s.accepted() == 1);
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 	held->release();
 
 	using op = ldap::modify_operation;
@@ -3007,7 +3012,7 @@ TEST_CASE("client: when write forwarders do not retry", "[net][client][write][re
 		CHECK(r.error().diagnostic_message == "already there");
 		CHECK(std::string_view(r.error().context) == "add " + std::string(jdoe_text));
 		CHECK(s.accepted() == 1);
-		CHECK(f.pool->connections() == 1);// still pooled
+		CHECK(f.pool->connection_count() == 1);// still pooled
 		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
 	}
 	SECTION("busy")
@@ -3049,7 +3054,7 @@ TEST_CASE("client: when write forwarders do not retry", "[net][client][write][re
 		CHECK(
 		  f.obs.events
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok", "disconnect " + text(s.url()) + " closed" });
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 	}
 	SECTION("the operation times out")
 	{
@@ -3089,7 +3094,7 @@ TEST_CASE("client: when write forwarders do not retry", "[net][client][write][re
 		auto &s = f.server({ { answer({ bind_resp(1) }), step{}, step{} }, bind_ok() });// never answers
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
 		std::stop_source stop;
-		outcome<ldap::result<ldap::response>> d;
+		outcome<ldap::result<ldap::update_result>> d;
 		spawn(f.ioc, stop.get_token(), f.pool->del({ .entry = jdoe_dn() }), d);
 		drive_until(f.ioc, [&s] { return s.accepted() == 1 && s.log(0).received.size() == 2; });
 		stop.request_stop();
@@ -3107,17 +3112,17 @@ TEST_CASE("client: a write never sent is retried once on another connection", "[
 	auto &s =
 	  f.server({ bind_ok(), { answer({ bind_resp(1) }), answer({ written<ldap::add_response>(2) }) }, bind_ok() },
 		socket_buffers::small);
-	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = std::nullopt, .observer = &f.obs });
 	std::size_t send_buffer = 0;
 	connect_small(*f.pool, s, &send_buffer);
 	auto held = f.acquire();
 	REQUIRE(held.has_value());
 	REQUIRE(send_buffer + s.receive_buffer(0) < oversized_add_value);
-	outcome<ldap::result<ldap::response>> big;
-	outcome<ldap::result<ldap::response>> queued;
+	outcome<ldap::result<ldap::update_result>> big;
+	outcome<ldap::result<ldap::update_result>> queued;
 	spawn(f.ioc, (*held)->add(oversized_add()), big);
 	spawn(f.ioc, f.pool->add(jdoe_add()), queued);// queued behind `big` on the same connection
-	drive_until(f.ioc, [&held] { return (*held)->outstanding() == 2; });
+	drive_until(f.ioc, [&held] { return (*held)->outstanding_count() == 2; });
 	CHECK_FALSE(big.done());
 	full(*held).close();
 	drive_until(f.ioc, [&] { return big.done() && queued.done(); });
@@ -3135,7 +3140,7 @@ TEST_CASE("client: a write never sent is retried once on another connection", "[
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 			"connect " + text(s.url()) + " ok",
 			"disconnect " + text(s.url()) + " closed" });
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 }
 
 TEST_CASE("client: an extended operation never sent is retried once on another connection",
@@ -3149,19 +3154,19 @@ TEST_CASE("client: an extended operation never sent is retried once on another c
 		  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 0 }, "1.2.3.5", "answer" } } }) },
 		bind_ok() },
 	  socket_buffers::small);
-	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .probe_idle_after = std::nullopt, .observer = &f.obs });
 	std::size_t send_buffer = 0;
 	connect_small(*f.pool, s, &send_buffer);
 	auto held = f.acquire();
 	REQUIRE(held.has_value());
 	REQUIRE(send_buffer + s.receive_buffer(0) < oversized_add_value);
-	outcome<ldap::result<ldap::response>> big;
+	outcome<ldap::result<ldap::update_result>> big;
 	outcome<ldap::result<ldap::extended_result>> queued;
 	spawn(f.ioc, (*held)->add(oversized_add()), big);
 	spawn(f.ioc,
 	  f.pool->extended({ .name = "1.2.3.4", .value = "question" }),
 	  queued);// queued behind `big` on the same connection
-	drive_until(f.ioc, [&held] { return (*held)->outstanding() == 2; });
+	drive_until(f.ioc, [&held] { return (*held)->outstanding_count() == 2; });
 	CHECK_FALSE(big.done());
 	full(*held).close();
 	drive_until(f.ioc, [&] { return big.done() && queued.done(); });
@@ -3180,7 +3185,7 @@ TEST_CASE("client: an extended operation never sent is retried once on another c
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 			"connect " + text(s.url()) + " ok",
 			"disconnect " + text(s.url()) + " closed" });
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 }
 
 namespace {
@@ -3193,7 +3198,7 @@ struct card
 }// namespace
 
 template<>
-constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+constexpr auto ldap::mapping<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
 
 namespace {
 
@@ -3483,7 +3488,7 @@ TEST_CASE("client: the AD helpers retire the lost connection before the retry", 
 		CHECK(f.obs.events
 			  == std::vector<std::string>{
 				"connect " + text(u) + " ok", "disconnect " + text(u) + " closed", "connect " + text(u) + " ok" });
-		CHECK(f.pool->connections() == 1);
+		CHECK(f.pool->connection_count() == 1);
 	};
 	SECTION("ad::read_all_values")
 	{
@@ -3589,7 +3594,7 @@ TEST_CASE("client: search_paged_stream on one lease", "[net][client][paged]")
 		auto dns = finish(f.ioc, drain_pages(*pages));
 		REQUIRE(dns.has_value());
 		CHECK(*dns == both);
-		CHECK(pages->pages() == 2);
+		CHECK(pages->page_count() == 2);
 		REQUIRE(s.log(0).received.size() == 3);
 		const auto &second = s.log(0).received[2];
 		auto cookie = ldap::find_paged(second.controls);
@@ -3688,7 +3693,7 @@ TEST_CASE("client: search_paged_stream on one lease", "[net][client][paged]")
 		CHECK(pages.error().code == ldap::client_errc::encode_error);
 		drive(f.ioc);
 		CHECK(s.accepted() == 0);
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 	}
 	SECTION("a max_pages of 0: nothing is opened")
 	{
@@ -3701,7 +3706,7 @@ TEST_CASE("client: search_paged_stream on one lease", "[net][client][paged]")
 		CHECK(pages.error().context == "search ou=people,dc=example,dc=org: max_pages is 0");
 		drive(f.ioc);
 		CHECK(s.accepted() == 0);
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 	}
 	SECTION("an acquire() failure")
 	{

@@ -217,7 +217,7 @@ void print_entry(const ldap::entry &e)
 	print_line("dn", e.dn);
 	for (const auto &a : e.attributes) {
 		for (const auto &v : a.values) {
-			print_line(a.type.name(), v);
+			print_line(a.type.text(), v);
 		}
 	}
 	std::println("");
@@ -250,8 +250,8 @@ template<class Stream> auto print_all(ldap::result<Stream> &s) -> capy::task<int
 	for (const auto &ref : s->references()) {
 		std::println("# search reference: {}", ref);
 	}
-	if constexpr (requires { s->pages(); }) {
-		std::println("# {} entries in {} pages", count, s->pages());
+	if constexpr (requires { s->page_count(); }) {
+		std::println("# {} entries in {} pages", count, s->page_count());
 	} else {
 		std::println("# {} entries", count);
 	}
@@ -279,7 +279,7 @@ auto ldapsearch(corosio::io_context &ioc, options o) -> capy::task<int>
 	}
 	params.scope = o.scope.value_or(u->scope().value_or(ldap::search_scope::whole_subtree));
 	if (o.filter) {
-		auto f = ldap::filter::raw(*o.filter);
+		auto f = ldap::filter::parse(*o.filter);
 		if (!f) {
 			std::println(stderr, "jhetz-ldapsearch: {}", f.error().message());
 			co_return 2;

@@ -14,33 +14,33 @@
 
 namespace jhetz::ldap {
 
-struct attribute_values
+struct attribute
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	attribute type{};
+	attribute_description type{};
 	std::pmr::vector<std::pmr::string> values{};// raw bytes, possibly binary
 
-	attribute_values() = default;
-	explicit attribute_values(const allocator_type &alloc) : type(alloc), values(alloc) {}
-	attribute_values(const attribute &type_,
+	attribute() = default;
+	explicit attribute(const allocator_type &alloc) : type(alloc), values(alloc) {}
+	attribute(const attribute_description &type_,
 	  std::initializer_list<std::string_view> values_,
 	  const allocator_type &alloc = {});
-	attribute_values(const attribute_values &) = default;
-	attribute_values(attribute_values &&) noexcept = default;
-	attribute_values(const attribute_values &other, const allocator_type &alloc)
+	attribute(const attribute &) = default;
+	attribute(attribute &&) noexcept = default;
+	attribute(const attribute &other, const allocator_type &alloc)
 	  : type(other.type, alloc), values(other.values, alloc)
 	{}
-	attribute_values(attribute_values &&other, const allocator_type &alloc)
+	attribute(attribute &&other, const allocator_type &alloc)
 	  : type(std::move(other.type), alloc), values(std::move(other.values), alloc)
 	{}
-	auto operator=(const attribute_values &) -> attribute_values & = default;
-	auto operator=(attribute_values &&) -> attribute_values & = default;
-	~attribute_values() = default;
+	auto operator=(const attribute &) -> attribute & = default;
+	auto operator=(attribute &&) -> attribute & = default;
+	~attribute() = default;
 
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return values.get_allocator(); }
 
-	friend auto operator==(const attribute_values &, const attribute_values &) -> bool = default;
+	friend auto operator==(const attribute &, const attribute &) -> bool = default;
 };
 
 // DN text plus attributes in the order the server sent them, names kept as
@@ -50,7 +50,7 @@ struct entry
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
 	std::pmr::string dn{};
-	std::pmr::vector<attribute_values> attributes{};
+	std::pmr::vector<attribute> attributes{};
 
 	entry() = default;
 	explicit entry(const allocator_type &alloc) : dn(alloc), attributes(alloc) {}
@@ -69,9 +69,10 @@ struct entry
 	// Values of `type` (case-insensitive, options compared as a set), or
 	// nullptr.
 	[[nodiscard]] auto find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *;
-	[[nodiscard]] auto find(const attribute &type) const noexcept -> const std::pmr::vector<std::pmr::string> *
+	[[nodiscard]] auto find(const attribute_description &type) const noexcept
+	  -> const std::pmr::vector<std::pmr::string> *
 	{
-		return find(type.name());
+		return find(type.text());
 	}
 
 	// dn::parse(dn, mr).

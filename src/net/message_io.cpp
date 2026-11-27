@@ -64,7 +64,7 @@ void read_buffer::consume(std::size_t n) noexcept
 auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) -> capy::task<result<std::size_t>>
 {
 	std::string where = "read ";
-	where += t.name();
+	where += t.endpoint();
 	while (true) {
 		const auto data = buf.data();
 		std::size_t want = read_buffer::min_read;
@@ -137,7 +137,7 @@ auto read_message(transport &t, read_buffer &buf, read_options options) -> capy:
 	buf.consume(*size);
 	if (!m) {
 		co_return std::unexpected(
-		  ldap::detail::with_context(std::move(m.error()), ldap::detail::format("read {}", t.name())));
+		  ldap::detail::with_context(std::move(m.error()), ldap::detail::format("read {}", t.endpoint())));
 	}
 	co_return m;
 }
@@ -147,7 +147,7 @@ auto write_bytes(transport &t, std::span<const std::byte> bytes) -> capy::task<r
 	auto [ec, n] = co_await capy::write(t.stream(), capy::const_buffer(bytes.data(), bytes.size()));
 	if (ec) {
 		std::string context = "write ";
-		context += t.name();
+		context += t.endpoint();
 		if (n != 0) {
 			ldap::detail::format_to(context, " ({} of {} bytes written)", n, bytes.size());
 		}
@@ -165,7 +165,7 @@ auto write_message(transport &t, const message &m, std::pmr::memory_resource *mr
 	auto bytes = encode(m, mr);
 	if (!bytes) {
 		co_return std::unexpected(
-		  ldap::detail::with_context(std::move(bytes.error()), ldap::detail::format("write {}", t.name())));
+		  ldap::detail::with_context(std::move(bytes.error()), ldap::detail::format("write {}", t.endpoint())));
 	}
 	co_return co_await write_bytes(t, *bytes);
 }
@@ -175,7 +175,7 @@ auto write_message(transport &t, const message &m, ber::writer &w) -> capy::task
 	w.clear();
 	if (auto e = encode(w, m); !e) {
 		co_return std::unexpected(
-		  ldap::detail::with_context(std::move(e.error()), ldap::detail::format("write {}", t.name())));
+		  ldap::detail::with_context(std::move(e.error()), ldap::detail::format("write {}", t.endpoint())));
 	}
 	co_return co_await write_bytes(t, w.bytes());
 }

@@ -479,7 +479,7 @@ TEST_CASE("read_message decodes into read_options' memory resource", "[net][read
 	}
 	CHECK(heap.bytes() > before);
 	arena.release();
-	CHECK(arena_upstream.outstanding() == 0);
+	CHECK(arena_upstream.outstanding_count() == 0);
 }
 
 TEST_CASE("write_message into a caller's resource or a reused writer", "[net][write_message][pmr]")
@@ -500,7 +500,7 @@ TEST_CASE("write_message into a caller's resource or a reused writer", "[net][wr
 		REQUIRE(run_task(ioc, net::write_message(client, bind_request_msg(1), &counting)).has_value());
 	}
 	CHECK(counting.allocations() == 1);// the encoded PDU, reserved once
-	CHECK(counting.outstanding() == 0);
+	CHECK(counting.outstanding_count() == 0);
 
 	ldap::ber::writer w{ ldap::ber::writer::allocator_type(&counting) };
 	REQUIRE(run_task(ioc, net::write_message(client, bind_request_msg(2), w)).has_value());
@@ -531,7 +531,7 @@ TEST_CASE("transport basics", "[net][transport]")
 	CHECK(empty.type() == net::transport::kind::none);
 	CHECK_FALSE(empty.is_open());
 	CHECK_FALSE(empty.is_tls());
-	CHECK(empty.name() == "no transport");
+	CHECK(empty.endpoint() == "no transport");
 	CHECK(empty.host().empty());
 	empty.close();// harmless
 	empty.cancel();
@@ -540,10 +540,10 @@ TEST_CASE("transport basics", "[net][transport]")
 	auto t = net::transport::wrap(std::move(a), "x");
 	CHECK(t.type() == net::transport::kind::custom);
 	CHECK(t.is_open());
-	CHECK(t.name() == "x");
+	CHECK(t.endpoint() == "x");
 	net::transport moved = std::move(t);
 	CHECK(moved.is_open());
-	CHECK(moved.name() == "x");
+	CHECK(moved.endpoint() == "x");
 	CHECK_FALSE(t.is_open());// NOLINT(bugprone-use-after-move): moved-from is empty
 }
 
@@ -615,9 +615,9 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 			CHECK(*r == big);
 			CHECK(counting.bytes() >= bytes_of(big).size());
 			REQUIRE(m.read().has_value());
-			CHECK(counting.outstanding() == m.buf.capacity());// the buffer is all that lives there
+			CHECK(counting.outstanding_count() == m.buf.capacity());// the buffer is all that lives there
 		}
-		CHECK(counting.outstanding() == 0);
+		CHECK(counting.outstanding_count() == 0);
 	}
 	SECTION("the buffer grows once per larger PDU, even in tiny reads")
 	{
@@ -640,7 +640,7 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 		CHECK(b.get_allocator().resource() == &as_default);
 		b.prepare(10);
 		CHECK(as_default.allocations() == 1);
-		CHECK(as_default.outstanding() == net::read_buffer::min_read);// never less than min_read
+		CHECK(as_default.outstanding_count() == net::read_buffer::min_read);// never less than min_read
 	}
 	SECTION("fixed arena without fallback")
 	{

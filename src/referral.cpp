@@ -1,4 +1,4 @@
-// referral_target (referral.hpp): the request that progresses an operation
+// referred_request (referral.hpp): the request that progresses an operation
 // at a referral's or continuation reference's target. Part of the codec.
 #include "jhetz/ldap/referral.hpp"
 
@@ -49,7 +49,7 @@ namespace {
 
 }// namespace
 
-auto referral_target(const url &target, search_params original, reference_kind kind) -> result<search_params>
+auto referred_request(const url &target, search_params original, reference_kind kind) -> result<search_params>
 {
 	if (auto c = check_extensions(target); !c) {
 		return std::unexpected(std::move(c.error()));
@@ -69,27 +69,27 @@ auto referral_target(const url &target, search_params original, reference_kind k
 	return original;
 }
 
-auto referral_target(const url &target, compare_params original) -> result<compare_params>
+auto referred_request(const url &target, compare_params original) -> result<compare_params>
 {
 	return with_entry(target, std::move(original), &compare_params::entry);
 }
 
-auto referral_target(const url &target, add_params original) -> result<add_params>
+auto referred_request(const url &target, add_params original) -> result<add_params>
 {
 	return with_entry(target, std::move(original), &add_params::entry);
 }
 
-auto referral_target(const url &target, modify_params original) -> result<modify_params>
+auto referred_request(const url &target, modify_params original) -> result<modify_params>
 {
 	return with_entry(target, std::move(original), &modify_params::object);
 }
 
-auto referral_target(const url &target, del_params original) -> result<del_params>
+auto referred_request(const url &target, del_params original) -> result<del_params>
 {
 	return with_entry(target, std::move(original), &del_params::entry);
 }
 
-auto referral_target(const url &target, modify_dn_params original) -> result<modify_dn_params>
+auto referred_request(const url &target, modify_dn_params original) -> result<modify_dn_params>
 {
 	return with_entry(target, std::move(original), &modify_dn_params::entry);
 }

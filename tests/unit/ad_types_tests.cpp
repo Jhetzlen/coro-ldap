@@ -303,7 +303,7 @@ struct ad_account
 }// namespace
 
 template<>
-constexpr auto ldap::schema<ad_account> = ldap::describe(ldap::object_class("user"),
+constexpr auto ldap::mapping<ad_account> = ldap::describe(ldap::object_class("user"),
   ldap::field<&ad_account::sam_account_name>("sAMAccountName"),
   ldap::field<&ad_account::object_sid>("objectSid", ldap::read_only),
   ldap::field<&ad_account::object_guid>("objectGUID", ldap::read_only),
@@ -403,7 +403,7 @@ auto ber_of(const ldap::filter &f) -> std::string
 }// namespace
 
 template<>
-constexpr auto ldap::schema<ad_group> = ldap::describe(ldap::object_class("group"),
+constexpr auto ldap::mapping<ad_group> = ldap::describe(ldap::object_class("group"),
   ldap::field<&ad_group::cn>("cn"),
   ldap::field<&ad_group::group_type>("groupType"));
 

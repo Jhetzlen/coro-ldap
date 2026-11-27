@@ -74,7 +74,7 @@ auto main(int argc, char **argv) -> int
 		cfg.seeds.push_back(fuzz::to_input(t));
 	}
 	for (const auto t : { texts[0], texts[6], texts[1] }) {
-		auto f = ldap::filter::raw(t);
+		auto f = ldap::filter::parse(t);
 		if (!f) {
 			return 1;
 		}

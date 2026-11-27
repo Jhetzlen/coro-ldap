@@ -1317,7 +1317,7 @@ namespace {
 				out = { .text = t->oid, .resolved = true };
 				return true;
 			}
-			if (const object_class_type *c = schema->find_object_class(v)) {
+			if (const object_class_description *c = schema->find_object_class(v)) {
 				out = { .text = c->oid, .resolved = true };
 				return true;
 			}
@@ -1376,9 +1376,9 @@ namespace {
 		const server_schema *schema;
 		std::size_t depth = 0;
 
-		[[nodiscard]] auto key_of(const attribute &type) const noexcept -> type_key
+		[[nodiscard]] auto key_of(const attribute_description &type) const noexcept -> type_key
 		{
-			const std::string_view name = type.name();
+			const std::string_view name = type.text();
 			if (schema != nullptr) {
 				if (const attribute_type *t = schema->find_attribute(name)) {
 					return { .text = t->oid, .resolved = true };
@@ -1479,7 +1479,7 @@ namespace {
 
 	// The equality rule the lookup gives `type`; null for a rule match() does
 	// not implement. The rule's text is read before the next lookup call.
-	auto rule_of(const attribute &type, const dn_context &ctx) -> const rule_entry *
+	auto rule_of(const attribute_description &type, const dn_context &ctx) -> const rule_entry *
 	{
 		const std::string_view rule = ctx.lookup(ctx.context, type);
 		return find_rule(rule.empty() ? std::string_view{ "caseIgnoreMatch" } : rule);
@@ -1489,7 +1489,7 @@ namespace {
 	auto ava_match(const ava &x, const ava &y, const dn_context &ctx) -> match_result
 	{
 		const rule_entry *e = rule_of(x.type, ctx);
-		if (x.type.name() != y.type.name() && rule_of(y.type, ctx) != e) {
+		if (x.type.text() != y.type.text() && rule_of(y.type, ctx) != e) {
 			return match_result::undefined;
 		}
 		if (e == nullptr || e->kind != rule_kind::equality) {
@@ -1918,19 +1918,22 @@ namespace detail {
 
 auto distinguished_name_match(const dn &attribute_value, const dn &assertion_value) -> match_result
 {
-	const detail::equality_rule_lookup lookup = [](const void *, const attribute &) -> std::string_view { return {}; };
+	const detail::equality_rule_lookup lookup = [](const void *, const attribute_description &) -> std::string_view {
+		return {};
+	};
 	return detail::distinguished_name_match(attribute_value, assertion_value, lookup, nullptr, nullptr);
 }
 
 auto distinguished_name_match(const dn &attribute_value, const dn &assertion_value, const server_schema &schema)
   -> match_result
 {
-	const detail::equality_rule_lookup lookup = [](const void *context, const attribute &type) -> std::string_view {
+	const detail::equality_rule_lookup lookup = [](const void *context,
+												  const attribute_description &type) -> std::string_view {
 		const auto &s = *static_cast<const server_schema *>(context);
-		const attribute_type *t = s.find_attribute(type.name());
+		const attribute_type *t = s.find_attribute(type.text());
 		if (t == nullptr) {
 			// A built-in name the schema does not list takes its OID's type.
-			if (const std::string_view oid = builtin_oid(builtin_types, type.name()); !oid.empty()) {
+			if (const std::string_view oid = builtin_oid(builtin_types, type.text()); !oid.empty()) {
 				t = s.find_attribute(oid);
 			}
 		}

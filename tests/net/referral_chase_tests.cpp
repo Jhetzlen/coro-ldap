@@ -223,11 +223,11 @@ TEST_CASE("chase_search: continuation references are followed", "[net][referral]
 	CHECK(dns(*r)
 		  == std::vector<std::string>{
 			"uid=jdoe,ou=a,dc=example,dc=org", "uid=jdoe,ou=b,dc=example,dc=org", "uid=other,ou=c,dc=example,dc=org" });
-	REQUIRE(r->referrals.size() == 2);
-	CHECK(r->referrals[0].uri == "ldap://b.example/ou=b,dc=example,dc=org");
-	CHECK(r->referrals[0].kind == reference_kind::continuation_reference);
-	CHECK(r->referrals[0].depth == 1);
-	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed, referral_outcome::followed });
+	REQUIRE(r->referral_attempts.size() == 2);
+	CHECK(r->referral_attempts[0].uri == "ldap://b.example/ou=b,dc=example,dc=org");
+	CHECK(r->referral_attempts[0].kind == reference_kind::continuation_reference);
+	CHECK(r->referral_attempts[0].depth == 1);
+	CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::followed, referral_outcome::followed });
 	CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "b.example", 1 }, { "c.example", 1 } });
 	w.check_servers();
 
@@ -264,7 +264,7 @@ TEST_CASE("chase_search: nothing is left on the caller's resource once it return
 			  auto r = co_await ldap::chase_search(on.origin.conn, search(), on.connector(), {}, &mr);
 			  n = r ? r->entries.size() : 0;
 		  }
-		  co_return std::pair{ n, mr.outstanding() };
+		  co_return std::pair{ n, mr.outstanding_count() };
 	  }(w, arena));
 	CHECK(entries == 2);
 	CHECK(arena.allocations() > 0);
@@ -286,7 +286,7 @@ TEST_CASE("chase_search: the request's follow_references false keeps the referen
 	REQUIRE(r.has_value());
 	CHECK(r->entries.size() == 1);
 	CHECK(r->references == ldap::string_list{ "ldap://b.example/ou=b,dc=example,dc=org" });
-	CHECK(r->unlisted == 1);
+	CHECK(r->unlisted_attempts == 1);
 	CHECK_FALSE(r->is_complete());
 	CHECK(w.asked.empty());
 	w.check_servers();
@@ -310,7 +310,7 @@ TEST_CASE("chase_search: limit codes keep the entries", "[net][referral]")
 	CHECK(r->diagnostic_message == "size limit");
 	CHECK(r->controls == std::pmr::vector<ldap::control>{ ldap::control{ "1.2.3.4", false, "v" } });
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org", "uid=jdoe,ou=b,dc=example,dc=org" });
-	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
+	CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::followed });
 	CHECK_FALSE(r->is_complete());// b's search ended with timeLimitExceeded
 	w.check_servers();
 }
@@ -355,7 +355,7 @@ TEST_CASE("chase_search: the origin's limit code alone leaves the search partial
 	CHECK(r->result_code == 11);
 	CHECK(r->diagnostic_message == "admin");
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
-	CHECK(r->referrals.empty());
+	CHECK(r->referral_attempts.empty());
 	CHECK_FALSE(r->is_complete());
 	w.check_servers();
 }
@@ -380,8 +380,8 @@ TEST_CASE("chase_search: nested references, one hop deeper each", "[net][referra
 		CHECK(dns(*r)
 			  == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org", "uid=jdoe,ou=c,ou=b,dc=example,dc=org" });
 		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "b.example", 1 }, { "c.example", 2 } });
-		REQUIRE(r->referrals.size() == 2);
-		CHECK(r->referrals[1].depth == 2);
+		REQUIRE(r->referral_attempts.size() == 2);
+		CHECK(r->referral_attempts[1].depth == 2);
 	}
 	SECTION("over max_hops: partial")
 	{
@@ -389,7 +389,8 @@ TEST_CASE("chase_search: nested references, one hop deeper each", "[net][referra
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->is_complete());
 		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org" });
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed, referral_outcome::limit_reached });
+		CHECK(
+		  outcomes(r->referral_attempts) == std::vector{ referral_outcome::followed, referral_outcome::limit_reached });
 		CHECK(w.asked.size() == 1);
 	}
 	SECTION("over max_targets: partial, the rest counted, not examined")
@@ -397,8 +398,8 @@ TEST_CASE("chase_search: nested references, one hop deeper each", "[net][referra
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 1 }));
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->is_complete());
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
-		CHECK(r->unlisted == 1);
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::followed });
+		CHECK(r->unlisted_attempts == 1);
 		CHECK(w.asked.size() == 1);
 	}
 	w.check_servers();
@@ -419,16 +420,17 @@ TEST_CASE("chase_search: many references cost little once the limits are reached
 	w.serve("a.example", { std::move(s) });
 	w.refused = { "no.example" };
 
-	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 2, .max_attempts = 4 }));
+	auto r =
+	  w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 2, .max_listed_attempts = 4 }));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
 	// Three unparseable and one skipped listed; the rest counted.
-	CHECK(outcomes(r->referrals)
+	CHECK(outcomes(r->referral_attempts)
 		  == std::vector{ referral_outcome::unparseable,
 			referral_outcome::unparseable,
 			referral_outcome::unparseable,
-			referral_outcome::skipped_policy });
-	CHECK(r->unlisted == 1 + (references - 2));
+			referral_outcome::refused });
+	CHECK(r->unlisted_attempts == 1 + (references - 2));
 	CHECK(w.asked.size() == 2);
 	w.check_servers();
 }
@@ -443,12 +445,12 @@ TEST_CASE("chase_search: over max_hops, one entry per reference, nothing parsed"
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_hops = 0 }));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
-	REQUIRE(r->referrals.size() == 2);
-	CHECK(r->referrals[0].uri == "ldap://b.example/ou=b,dc=example,dc=org");
-	CHECK(r->referrals[0].outcome == referral_outcome::limit_reached);
+	REQUIRE(r->referral_attempts.size() == 2);
+	CHECK(r->referral_attempts[0].uri == "ldap://b.example/ou=b,dc=example,dc=org");
+	CHECK(r->referral_attempts[0].outcome == referral_outcome::limit_reached);
 	// Not unparseable: over max_hops the URI is not parsed.
-	CHECK(r->referrals[1].uri == "not a url");
-	CHECK(r->referrals[1].outcome == referral_outcome::limit_reached);
+	CHECK(r->referral_attempts[1].uri == "not a url");
+	CHECK(r->referral_attempts[1].outcome == referral_outcome::limit_reached);
 	CHECK(w.asked.empty());
 	w.check_servers();
 }
@@ -465,7 +467,7 @@ TEST_CASE("chase_search: max_hops 0 follows nothing", "[net][referral]")
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
-	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::limit_reached });
+	CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::limit_reached });
 	CHECK(w.asked.empty());
 	w.check_servers();
 }
@@ -493,16 +495,16 @@ TEST_CASE("chase_search: a reference's URIs are alternatives", "[net][referral]"
 	REQUIRE(r.has_value());
 	CHECK(r->is_complete());
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org" });
-	CHECK(outcomes(r->referrals)
+	CHECK(outcomes(r->referral_attempts)
 		  == std::vector{ referral_outcome::unparseable,
 			referral_outcome::unparseable,
 			referral_outcome::failed,
-			referral_outcome::skipped_policy,
+			referral_outcome::refused,
 			referral_outcome::followed });
-	REQUIRE(r->referrals[1].failure);
-	CHECK(r->referrals[1].failure->code == ldap::client_errc::invalid_url);
-	REQUIRE(r->referrals[2].failure);
-	CHECK(r->referrals[2].failure->code == std::errc::connection_refused);
+	REQUIRE(r->referral_attempts[1].failure);
+	CHECK(r->referral_attempts[1].failure->code == ldap::client_errc::invalid_url);
+	REQUIRE(r->referral_attempts[2].failure);
+	CHECK(r->referral_attempts[2].failure->code == std::errc::connection_refused);
 	// The critical extension is refused before the connector is asked.
 	CHECK(w.asked
 		  == std::vector<std::pair<std::string, std::size_t>>{
@@ -528,13 +530,13 @@ TEST_CASE("chase_search: references that cannot be followed leave the search par
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
-	CHECK(outcomes(r->referrals)
-		  == std::vector{ referral_outcome::failed, referral_outcome::skipped_policy, referral_outcome::unparseable });
+	CHECK(outcomes(r->referral_attempts)
+		  == std::vector{ referral_outcome::failed, referral_outcome::refused, referral_outcome::unparseable });
 	CHECK(r->references
 		  == ldap::string_list{
 			"ldap://b.example/ou=b,dc=example,dc=org", "ldap://c.example/ou=c,dc=example,dc=org", "ldap://c.example" });
-	REQUIRE(r->referrals[0].failure);
-	CHECK(r->referrals[0].failure->code == errc::no_such_object);
+	REQUIRE(r->referral_attempts[0].failure);
+	CHECK(r->referral_attempts[0].failure->code == errc::no_such_object);
 	w.check_servers();
 }
 
@@ -548,7 +550,7 @@ TEST_CASE("chase_search: without a connector nothing is followed", "[net][referr
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), ldap::referral_connector{}));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
-	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::skipped_policy });
+	CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::refused });
 	w.check_servers();
 }
 
@@ -569,7 +571,7 @@ TEST_CASE("chase_search: loops are not followed", "[net][referral]")
 		REQUIRE(r.has_value());
 		CHECK(r->is_complete());
 		CHECK(r->references.empty());
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::skipped_loop });
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::skipped_loop });
 		CHECK(w.asked.empty());
 	}
 	SECTION("between two servers")
@@ -583,7 +585,8 @@ TEST_CASE("chase_search: loops are not followed", "[net][referral]")
 		REQUIRE(r.has_value());
 		CHECK(r->is_complete());
 		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org" });
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed, referral_outcome::skipped_loop });
+		CHECK(
+		  outcomes(r->referral_attempts) == std::vector{ referral_outcome::followed, referral_outcome::skipped_loop });
 		CHECK(w.asked.size() == 1);
 	}
 	w.check_servers();
@@ -605,7 +608,8 @@ TEST_CASE("chase_search: a loop is recognized before max_targets, not over max_h
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 1 }));
 		REQUIRE(r.has_value());
 		CHECK(r->is_complete());
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed, referral_outcome::skipped_loop });
+		CHECK(
+		  outcomes(r->referral_attempts) == std::vector{ referral_outcome::failed, referral_outcome::skipped_loop });
 	}
 	SECTION("over max_hops: not parsed, so not known to be a loop")
 	{
@@ -613,7 +617,7 @@ TEST_CASE("chase_search: a loop is recognized before max_targets, not over max_h
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_hops = 0 }));
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->is_complete());
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::limit_reached });
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::limit_reached });
 	}
 	w.check_servers();
 }
@@ -640,10 +644,10 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		CHECK(dns(*r)
 			  == std::vector<std::string>{
 				"uid=jdoe,ou=people,dc=example,dc=org", "uid=jdoe,ou=c,ou=people,dc=example,dc=org" });
-		REQUIRE(r->referrals.size() == 2);
-		CHECK(r->referrals[0].kind == reference_kind::referral);
-		CHECK(r->referrals[1].kind == reference_kind::continuation_reference);
-		CHECK(r->referrals[1].depth == 2);
+		REQUIRE(r->referral_attempts.size() == 2);
+		CHECK(r->referral_attempts[0].kind == reference_kind::referral);
+		CHECK(r->referral_attempts[1].kind == reference_kind::continuation_reference);
+		CHECK(r->referral_attempts[1].depth == 2);
 		CHECK(w.servers["b.example"]->searches().at(0).base_object == "ou=people,dc=example,dc=org");
 	}
 	SECTION("the target's limit code: its done fields, its entries")
@@ -660,7 +664,7 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		CHECK(r->diagnostic_message == "time limit");
 		CHECK(r->controls == std::pmr::vector<ldap::control>{ ldap::control{ "1.2.3.4", false, "b" } });
 		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=people,dc=example,dc=org" });
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::followed });
 		CHECK_FALSE(r->is_complete());
 	}
 	SECTION("not chased when the request's follow_referrals is false")
@@ -700,7 +704,7 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
 		REQUIRE(r.has_value());
 		CHECK(r->is_complete());
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed, referral_outcome::followed });
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::failed, referral_outcome::followed });
 	}
 	SECTION("none followed: the last failure")
 	{
@@ -716,7 +720,7 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::no_such_object);
 		// The attempts are counted in the context.
-		CHECK(r.error().context.starts_with("referral chase (URIs: 1 skipped_policy, 1 failed)"));
+		CHECK(r.error().context.starts_with("referral chase (URIs: 1 refused, 1 failed)"));
 	}
 	SECTION("none followed and none failed: the referral")
 	{
@@ -753,7 +757,7 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		CHECK(r.error().context.starts_with("referral chase (URIs: 1 limit_reached, 1 failed)"));
 		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "b.example", 1 } });
 	}
-	SECTION("over max_attempts: the other URIs counted as unlisted")
+	SECTION("over max_listed_attempts: the other URIs counted as unlisted")
 	{
 		w.serve("a.example",
 		  { answer({ done_msg(1,
@@ -762,7 +766,7 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 			"",
 			{ "ldap://b.example/ou=people,dc=example,dc=org", "ldap://c.example/ou=people,dc=example,dc=org" }) }) });
 		w.unreachable = { "b.example", "c.example" };
-		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_attempts = 1 }));
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_listed_attempts = 1 }));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == std::errc::connection_refused);
 		CHECK(r.error().context.starts_with("referral chase (URIs: 1 failed, 1 unlisted)"));
@@ -775,7 +779,7 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::referral);
-		CHECK(r.error().context.starts_with("referral chase (URIs: 1 skipped_policy, 1 unparseable)"));
+		CHECK(r.error().context.starts_with("referral chase (URIs: 1 refused, 1 unparseable)"));
 	}
 	SECTION("a referral without URIs: returned as it is")
 	{
@@ -838,8 +842,8 @@ TEST_CASE("chase_compare: referral results", "[net][referral]")
 		w.serve("a.example", { answer({ result_msg<ldap::compare_response>(1, 6) }) });
 		auto r = w.run(ldap::chase_compare(w.origin.conn, request, w.connector()));
 		REQUIRE(r.has_value());
-		CHECK(r->value);
-		CHECK(r->referrals.empty());
+		CHECK(r->matched);
+		CHECK(r->referral_attempts.empty());
 	}
 	SECTION("followed")
 	{
@@ -850,11 +854,11 @@ TEST_CASE("chase_compare: referral results", "[net][referral]")
 		w.serve("b.example", { answer({ answered }) });
 		auto r = w.run(ldap::chase_compare(w.origin.conn, request, w.connector()));
 		REQUIRE(r.has_value());
-		CHECK_FALSE(r->value);
+		CHECK_FALSE(r->matched);
 		CHECK(r->diagnostic_message == "checked on b");
 		REQUIRE(r->controls.size() == 1);
 		CHECK(r->controls[0].type == "1.2.3.4");
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::followed });
 		REQUIRE(w.servers["b.example"]->log.received.size() == 1);
 		const auto &sent = std::get<ldap::compare_request>(w.servers["b.example"]->log.received[0].op);
 		CHECK(sent.entry == "uid=jdoe,ou=moved,dc=example,dc=org");
@@ -984,10 +988,10 @@ TEST_CASE("chase_search: the timeout bounds the whole chase, the connector inclu
 		CHECK_FALSE(r->is_complete());
 		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
 		// b's reference is left unexamined: the chase stopped.
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
-		CHECK(r->unlisted == 1);
-		REQUIRE(r->referrals[0].failure);
-		CHECK(r->referrals[0].failure->code == ldap::cond::timeout);
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::failed });
+		CHECK(r->unlisted_attempts == 1);
+		REQUIRE(r->referral_attempts[0].failure);
+		CHECK(r->referral_attempts[0].failure->code == ldap::cond::timeout);
 		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "slow.example", 1 } });
 	}
 	SECTION("a connector that returns after it is spent: nothing is sent, the reference stops")
@@ -1004,8 +1008,8 @@ TEST_CASE("chase_search: the timeout bounds the whole chase, the connector inclu
 		CHECK_FALSE(r->is_complete());
 		// One limit_reached entry: c, the reference's other URI, is not
 		// looked at.
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::limit_reached });
-		CHECK(r->unlisted == 0);
+		CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::limit_reached });
+		CHECK(r->unlisted_attempts == 0);
 		CHECK(w.asked.size() == 1);
 		CHECK(w.servers["b.example"]->log.received.empty());
 	}
@@ -1251,7 +1255,7 @@ TEST_CASE("client chases: the authorizer's binding picks the setup and the clien
 	const auto setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret");
 	SECTION("anonymous: no setup, no certificate")
 	{
-		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_binding::anonymous, setup);
+		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_access::anonymous, setup);
 		REQUIRE(chosen);
 		CHECK_FALSE(chosen->setup);
 		CHECK_FALSE(chosen->client_certificate);
@@ -1262,7 +1266,7 @@ TEST_CASE("client chases: the authorizer's binding picks the setup and the clien
 	}
 	SECTION("same_setup: the client's setup and certificate")
 	{
-		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_binding::same_setup, setup);
+		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_access::same_setup, setup);
 		REQUIRE(chosen);
 		CHECK(chosen->setup);
 		CHECK(chosen->client_certificate);
@@ -1273,22 +1277,22 @@ TEST_CASE("client chases: the authorizer's binding picks the setup and the clien
 	}
 	SECTION("same_setup with no setup: the certificate still, as the pooled connections have it")
 	{
-		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_binding::same_setup, {});
+		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_access::same_setup, {});
 		REQUIRE(chosen);
 		CHECK_FALSE(chosen->setup);
 		CHECK(chosen->client_certificate);
 	}
 	SECTION("anonymous and same_setup are kept apart")
 	{
-		const auto anonymous = ldap::detail::client_referral_identity(ldap::referral_binding::anonymous, setup);
-		const auto same = ldap::detail::client_referral_identity(ldap::referral_binding::same_setup, setup);
+		const auto anonymous = ldap::detail::client_referral_identity(ldap::referral_access::anonymous, setup);
+		const auto same = ldap::detail::client_referral_identity(ldap::referral_access::same_setup, setup);
 		REQUIRE(anonymous);
 		REQUIRE(same);
 		CHECK(anonymous->identity != same->identity);
 	}
 	SECTION("refuse: nothing")
 	{
-		CHECK_FALSE(ldap::detail::client_referral_identity(ldap::referral_binding::refuse, setup));
+		CHECK_FALSE(ldap::detail::client_referral_identity(ldap::referral_access::refuse, setup));
 	}
 }
 
@@ -1336,8 +1340,8 @@ TEST_CASE("make_same_policy_connector: connects, sets up once, reuses", "[net][r
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());// elsewhere.test is not allowed
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org", "uid=jdoe,ou=c,dc=example,dc=org" });
-	CHECK(outcomes(r->referrals)
-		  == std::vector{ referral_outcome::followed, referral_outcome::skipped_policy, referral_outcome::followed });
+	CHECK(outcomes(r->referral_attempts)
+		  == std::vector{ referral_outcome::followed, referral_outcome::refused, referral_outcome::followed });
 	drive_until(w.ioc, [&served] { return served.done(); });
 	served.get();
 	CHECK(log.error.empty());
@@ -1424,8 +1428,8 @@ TEST_CASE("make_same_policy_connector: a refused StartTLS fails the URI", "[net]
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
-	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
-	CHECK(r->referrals[0].failure.has_value());
+	CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::failed });
+	CHECK(r->referral_attempts[0].failure.has_value());
 	// Only the StartTLS request: no bind, no search in the clear.
 	t.check();
 	REQUIRE(t.server.log(0).received.size() == 1);
@@ -1445,9 +1449,9 @@ TEST_CASE("make_same_policy_connector: a failed setup fails the URI", "[net][ref
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
-	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
-	REQUIRE(r->referrals[0].failure);
-	CHECK(r->referrals[0].failure->code == errc::invalid_credentials);
+	CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::failed });
+	REQUIRE(r->referral_attempts[0].failure);
+	CHECK(r->referral_attempts[0].failure->code == errc::invalid_credentials);
 	t.check();
 	REQUIRE(t.server.log(0).received.size() == 1);
 	CHECK(std::holds_alternative<ldap::bind_request>(t.server.log(0).received[0].op));
@@ -1467,9 +1471,9 @@ TEST_CASE("make_same_policy_connector: a failed connect fails the URI", "[net][r
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
-	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
-	REQUIRE(r->referrals[0].failure);
-	CHECK(r->referrals[0].failure->code == std::errc::connection_refused);
+	CHECK(outcomes(r->referral_attempts) == std::vector{ referral_outcome::failed });
+	REQUIRE(r->referral_attempts[0].failure);
+	CHECK(r->referral_attempts[0].failure->code == std::errc::connection_refused);
 	w.check_servers();
 	connector = {};
 }
@@ -1497,7 +1501,7 @@ TEST_CASE("make_same_policy_connector: a closed connection is reopened", "[net][
 	CHECK_FALSE(r->is_complete());
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org", "uid=jdoe,ou=d,dc=example,dc=org" });
 	// c's search went to the closed connection and failed with it.
-	CHECK(outcomes(r->referrals)
+	CHECK(outcomes(r->referral_attempts)
 		  == std::vector{ referral_outcome::followed, referral_outcome::failed, referral_outcome::followed });
 	t.check();
 	REQUIRE(t.server.log(0).received.size() == 3);

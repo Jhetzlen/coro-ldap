@@ -40,7 +40,7 @@ struct attribute_type
 enum class object_class_kind { abstract, structural, auxiliary };
 
 // RFC 4512 section 4.1.1, in its field order.
-struct object_class_type
+struct object_class_description
 {
 	std::string oid{};
 	std::vector<std::string> names{};
@@ -64,7 +64,7 @@ struct dit_content_rule
 
 // One definition each; errors are decode_error with the reason.
 [[nodiscard]] auto parse_attribute_type(std::string_view text) -> result<attribute_type>;
-[[nodiscard]] auto parse_object_class(std::string_view text) -> result<object_class_type>;
+[[nodiscard]] auto parse_object_class(std::string_view text) -> result<object_class_description>;
 [[nodiscard]] auto parse_dit_content_rule(std::string_view text) -> result<dit_content_rule>;
 
 class server_schema;
@@ -83,7 +83,7 @@ class server_schema
 
 	// By any NAME (case-insensitive) or OID, options ignored; nullptr if unknown.
 	[[nodiscard]] auto find_attribute(std::string_view name) const noexcept -> const attribute_type *;
-	[[nodiscard]] auto find_object_class(std::string_view name) const noexcept -> const object_class_type *;
+	[[nodiscard]] auto find_object_class(std::string_view name) const noexcept -> const object_class_description *;
 	// nullptr if the server publishes none.
 	[[nodiscard]] auto find_dit_content_rule(std::string_view class_oid) const noexcept -> const dit_content_rule *;
 	// The attribute's SYNTAX, or its supertypes'; nullptr if none. Points into
@@ -103,7 +103,7 @@ class server_schema
 
   private:
 	std::vector<attribute_type> attributes_{};
-	std::vector<object_class_type> classes_{};
+	std::vector<object_class_description> classes_{};
 	std::vector<dit_content_rule> rules_{};
 	// Name / OID -> index; the first definition wins.
 	using name_index = std::unordered_map<std::string, std::size_t, detail::ci_hash, detail::ci_equal>;
@@ -301,7 +301,7 @@ template<described T> [[nodiscard]] auto validate(const server_schema &s) -> sch
 	for (const char *oc : detail::all_object_classes<T>) {
 		detail::check_object_class(s, oc, out);
 	}
-	for (const char *oc : schema<T>.auxiliary.names) {
+	for (const char *oc : mapping<T>.auxiliary.names) {
 		detail::check_auxiliary_class(s, oc, out);
 	}
 	std::apply(
@@ -315,16 +315,16 @@ template<described T> [[nodiscard]] auto validate(const server_schema &s) -> sch
 			 out),
 			...);
 	  },
-	  schema<T>.fields);
+	  mapping<T>.fields);
 	static constexpr auto names = detail::attribute_name_array<T>();
 	detail::check_duplicate_attributes(s, names, out);
-	if constexpr (schema<T>.classes.names.size() > 0) {
+	if constexpr (mapping<T>.classes.names.size() > 0) {
 		const auto fields = std::apply(
 		  [](const auto &...f) {
 			  return std::array<detail::field_use, sizeof...(f)>{ detail::field_use{
 				.name = f.name, .kind = std::remove_cvref_t<decltype(f)>::kind, .read_only = f.read_only }... };
 		  },
-		  schema<T>.fields);
+		  mapping<T>.fields);
 		detail::check_class_attributes(s, detail::all_object_classes<T>, fields, out);
 	}
 	return out;

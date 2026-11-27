@@ -43,7 +43,7 @@ namespace detail {
 	auto ranged_values_error(const entry &e, std::string_view name) -> std::optional<error>
 	{
 		for (const auto &a : e.attributes) {
-			const std::string_view description = a.type.name();
+			const std::string_view description = a.type.text();
 			if (!description.contains(';')) {
 				continue;
 			}
@@ -84,7 +84,7 @@ namespace detail {
 	auto unrequested_attribute_error(const entry &e, std::span<const std::string_view> names) -> std::optional<error>
 	{
 		for (const auto &a : e.attributes) {
-			const std::string_view description = a.type.name();
+			const std::string_view description = a.type.text();
 			// A range option (MS-ADTS 3.1.1.3.1.3.3) is left out: decode then
 			// reports the member's values as incomplete.
 			const auto ranged = description.contains(';') ? ad::parse_range(description)

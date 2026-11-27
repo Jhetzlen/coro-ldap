@@ -210,27 +210,27 @@ struct ad_domain
 }// namespace
 
 template<>
-constexpr auto ldap::schema<ad_user> = ldap::describe(ldap::object_class("user"),
+constexpr auto ldap::mapping<ad_user> = ldap::describe(ldap::object_class("user"),
   ldap::field<&ad_user::sam_account_name>("sAMAccountName"),
   ldap::field<&ad_user::account_expires>("accountExpires"),
   ldap::field<&ad_user::pwd_last_set>("pwdLastSet"),
   ldap::field<&ad_user::last_logon_timestamp>("lastLogonTimestamp", ldap::read_only));
 
 template<>
-constexpr auto ldap::schema<ad_user_raw> = ldap::describe(ldap::object_class("user"),
+constexpr auto ldap::mapping<ad_user_raw> = ldap::describe(ldap::object_class("user"),
   ldap::field<&ad_user_raw::sam_account_name>("sAMAccountName"),
   ldap::field<&ad_user_raw::account_expires>("accountExpires"),
   ldap::field<&ad_user_raw::usn_changed>("uSNChanged", ldap::read_only));
 
 template<>
-constexpr auto ldap::schema<ad_user_narrow> = ldap::describe(ldap::object_class("user"),
+constexpr auto ldap::mapping<ad_user_narrow> = ldap::describe(ldap::object_class("user"),
   ldap::field<&ad_user_narrow::account_expires>("accountExpires"),
   ldap::field<&ad_user_narrow::usn_changed>("uSNChanged", ldap::read_only),
   ldap::field<&ad_user_narrow::bad_interval>("userAccountControl"),
   ldap::field<&ad_user_narrow::bad_date>("userAccountControl"));
 
 template<>
-constexpr auto ldap::schema<ad_domain> = ldap::describe(ldap::object_class("domainDNS"),
+constexpr auto ldap::mapping<ad_domain> = ldap::describe(ldap::object_class("domainDNS"),
   ldap::field<&ad_domain::max_pwd_age>("maxPwdAge"),
   ldap::field<&ad_domain::lockout_duration>("lockoutDuration"),
   ldap::field<&ad_domain::lockout_observation_window>("lockOutObservationWindow"));

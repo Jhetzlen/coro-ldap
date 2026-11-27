@@ -251,16 +251,16 @@ TEST_CASE("operations: compare", "[net][operations]")
 	  answer({ result_msg<ldap::compare_response>(4, 0) }) });
 	auto yes = m.run(m.conn.compare({ .entry = jdoe, .attribute = "mail", .value = "jdoe@example.org" }));
 	REQUIRE(yes.has_value());
-	CHECK(yes->value);
+	CHECK(yes->matched);
 	CHECK(yes->matched_dn == "ou=people,dc=example,dc=org");
 	CHECK(yes->diagnostic_message == "from the cache");
 	REQUIRE(yes->controls.size() == 1);
 	CHECK(yes->controls[0] == post_read_control());
-	CHECK(yes->referrals.empty());
-	CHECK(yes->unlisted == 0);
+	CHECK(yes->referral_attempts.empty());
+	CHECK(yes->unlisted_attempts == 0);
 	auto no = m.run(m.conn.compare({ .entry = jdoe, .attribute = "mail", .value = "other@example.org" }));
 	REQUIRE(no.has_value());
-	CHECK_FALSE(no->value);
+	CHECK_FALSE(no->matched);
 	auto missing = m.run(m.conn.compare({ .entry = jdoe, .attribute = "pager", .value = "1" }));
 	REQUIRE_FALSE(missing.has_value());
 	CHECK(missing.error().code == ldap::cond::not_found);
@@ -808,7 +808,7 @@ TEST_CASE("operations: paged search follows the cookie", "[net][operations][page
 
 	auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 2));
 	REQUIRE(s.has_value());
-	CHECK(s->pages() == 1);
+	CHECK(s->page_count() == 1);
 	auto dns = m.run(drain_paged(*s));
 	REQUIRE(dns.has_value());
 	CHECK(*dns
@@ -818,7 +818,7 @@ TEST_CASE("operations: paged search follows the cookie", "[net][operations][page
 			"uid=d,ou=people,dc=example,dc=org",
 			"uid=e,ou=people,dc=example,dc=org" });
 	CHECK(s->done());
-	CHECK(s->pages() == 3);
+	CHECK(s->page_count() == 3);
 	REQUIRE(s->references().size() == 2);
 	auto urls = s->reference_urls();
 	REQUIRE(urls.size() == 1);// the https:// one is not an LDAP URL
@@ -874,7 +874,7 @@ TEST_CASE("operations: paged search against a server without paging", "[net][ope
 	auto dns = m.run(drain_paged(*s));
 	REQUIRE(dns.has_value());
 	CHECK(dns->size() == 3);
-	CHECK(s->pages() == 1);
+	CHECK(s->page_count() == 1);
 	m.check_server();
 }
 
@@ -1008,7 +1008,7 @@ template<class M> void release_after_one_page(M &m, ldap::search_params params =
 	auto e = m.run(s->next());
 	REQUIRE(e.has_value());
 	REQUIRE(e->has_value());
-	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+	drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 	*s = ldap::paged_search{};
 	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 	REQUIRE(m.log.received.size() == 2);
@@ -1060,13 +1060,13 @@ TEST_CASE("operations: a paged search stopped between pages releases the server'
 			REQUIRE(e->has_value());
 		}
 		// Page 2 ended (its SearchResultDone is queued), next() not called.
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(s->pages() == 2);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(s->page_count() == 2);
 		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 	}
-	CHECK(m.conn.outstanding() == 1);// the release's answer is due
+	CHECK(m.conn.outstanding_count() == 1);// the release's answer is due
 	auto b = m.run(bind_admin(m.conn));
-	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.outstanding_count() == 0);
 	CHECK(b.has_value());
 	CHECK(m.conn.is_open());
 	m.check_server();
@@ -1099,7 +1099,7 @@ TEST_CASE("operations: a paged search stops after max_pages pages", "[net][opera
 			CHECK(over.error().code == std::errc::value_too_large);
 			CHECK(over.error().context == "search ou=people,dc=example,dc=org: more than max_pages (3) pages");
 			CHECK(s->done());
-			CHECK(s->pages() == 3);
+			CHECK(s->page_count() == 3);
 			auto again = m.run(s->next());
 			REQUIRE_FALSE(again.has_value());
 			CHECK(again.error().code == std::errc::value_too_large);
@@ -1185,13 +1185,13 @@ TEST_CASE("operations: a paged search stopped mid-page abandons it, then release
 				REQUIRE(e.has_value());
 				REQUIRE(e->has_value());
 			}
-			CHECK(m.conn.outstanding() == 1);
+			CHECK(m.conn.outstanding_count() == 1);
 		}
 		// The abandoned page is not counted (it may never be answered), the
 		// release is (its answer is certain).
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		auto b = m.run(bind_admin(m.conn));
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(b.has_value());
 		CHECK(m.conn.is_open());
 		m.check_server();
@@ -1226,7 +1226,7 @@ TEST_CASE("operations: a paged search stopped mid-page abandons it, then release
 			CHECK(out.get().error().code == ldap::cond::canceled);
 			CHECK(out.get().error().context == "search ou=people,dc=example,dc=org (abandoned)");
 			CHECK(s->done());
-			CHECK(m.conn.outstanding() == 0);
+			CHECK(m.conn.outstanding_count() == 0);
 			drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });
 			CHECK(m.log.received[2] == ldap::message{ 3, ldap::abandon_request{ 2 } });
 		}
@@ -1326,7 +1326,7 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 		}
 		auto b = m.run(bind_admin(m.conn));
 		CHECK(b.has_value());
@@ -1368,7 +1368,7 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 			m.conn.close();
 		}
 		m.sockets.client.close();// closing a wrapped transport leaves the socket open
@@ -1396,7 +1396,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 			spawn(m.ioc, bind_admin(m.conn), bound);
 			drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 			CHECK_FALSE(bound.done());
@@ -1405,14 +1405,14 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 			std::size_t outstanding = 0;
 			run_on(m.ioc, m.conn.executor(), [&s, &m, &outstanding] {
 				*s = ldap::paged_search{};// while the bind is outstanding
-				outstanding = m.conn.outstanding();
+				outstanding = m.conn.outstanding_count();
 			});
 			CHECK(outstanding == 2);// the bind, and the held release's answer
 		}
 		drive_until(m.ioc, [&bound] { return bound.done(); });
 		CHECK(bound.get().has_value());
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// sent after the bind, and answered
-		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });// sent after the bind, and answered
+		CHECK(m.conn.outstanding_count() == 0);
 		auto b = m.run(bind_admin(m.conn));
 		CHECK(b.has_value());
 		m.check_server();
@@ -1437,7 +1437,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 			spawn(m.ioc, bind_admin(m.conn), bound);
 			drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 			CHECK_FALSE(bound.done());
@@ -1445,8 +1445,8 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		}
 		drive_until(m.ioc, [&bound] { return bound.done(); });
 		CHECK(bound.get().error().code == ldap::errc::invalid_credentials);
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.run(bind_admin(m.conn)).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 4);
@@ -1461,9 +1461,9 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{} });// reads the release, never answers
 		release_after_one_page(m);
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		m.conn.close();
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK_FALSE(m.conn.is_open());
 	}
 	SECTION("sent as the reader stops (nothing else outstanding): a reader reads its answer")
@@ -1481,13 +1481,13 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 				REQUIRE(e.has_value());
 				REQUIRE(e->has_value());
 			}
-			CHECK(m.conn.outstanding() == 1);// page 2, read by the reader
+			CHECK(m.conn.outstanding_count() == 1);// page 2, read by the reader
 		}// abandoning page 2 stops the reader; the release follows at once
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		// No other operation runs: only a reader restarted for the release
 		// reads its answer (else the io_context runs out of work first).
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 4);
@@ -1507,7 +1507,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 			ldap::connection gone = std::move(m.conn);
 			*s = ldap::paged_search{};// queues the release
 		}// the connection is destroyed: closed
@@ -1542,15 +1542,15 @@ TEST_CASE("operations: two paged search releases due at once", "[net][operations
 		auto eb = m.run(b->next());
 		REQUIRE(eb.has_value());
 		REQUIRE(eb->has_value());
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 		run_on(m.ioc, m.conn.executor(), [&a] { *a = ldap::paged_search{}; });
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });
 		run_on(m.ioc, m.conn.executor(), [&b] { *b = ldap::paged_search{}; });
-		CHECK(m.conn.outstanding() == 2);
+		CHECK(m.conn.outstanding_count() == 2);
 	}
-	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-	CHECK(m.conn.outstanding() == 0);
+	drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+	CHECK(m.conn.outstanding_count() == 0);
 	CHECK(m.conn.is_open());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 4);
@@ -1571,14 +1571,14 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		CHECK(m.log.received.size() == 2);// no StartTLS yet
 
 		server_sends(m, paged_done(2, ""));
 		drive_until(m.ioc, [&tls] { return tls.done(); });
 		REQUIRE_FALSE(tls.get().has_value());
 		CHECK(tls.get().error().code == errc::unavailable);// sent, and refused
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
@@ -1596,7 +1596,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 
 		// Samba's refusal of the release (id 2): ExtendedResponse,
 		// unavailableCriticalExtension, no responseName.
@@ -1608,7 +1608,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		REQUIRE(tls.done());
 		REQUIRE_FALSE(tls.get().has_value());
 		CHECK(tls.get().error().code == errc::unavailable);// sent, and refused
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
@@ -1642,7 +1642,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		CHECK(refused.code == client_errc::operation_in_progress);
 		CHECK(refused.context == "start tls during an earlier StartTLS");
 		CHECK(m.conn.is_open());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);// one StartTLS
 		CHECK(is_start_tls(m.log.received[2]));
@@ -1656,10 +1656,10 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		auto r = m.run(m.conn.start_tls());
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == std::errc::invalid_argument);
-		CHECK(m.conn.outstanding() == 1);// still due
+		CHECK(m.conn.outstanding_count() == 1);// still due
 		server_sends(m, paged_done(2, ""));
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		CHECK(m.log.received.size() == 2);
@@ -1682,7 +1682,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		server_sends(m, bind_resp(3));
 		drive_until(m.ioc, [&bound] { return bound.done(); });
 		CHECK(bound.get().has_value());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 	}
 	SECTION("a bind started while it waits: refused once the answer arrives, as if called then")
 	{
@@ -1707,7 +1707,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		server_sends(m, bind_resp(3));
 		drive_until(m.ioc, [&bound] { return bound.done(); });
 		CHECK(bound.get().has_value());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		CHECK(m.log.received.size() == 3);// no StartTLS
@@ -1721,13 +1721,13 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		auto p = people_search();
 		p.timeout = std::chrono::milliseconds(100);// the page's limit, and the release's
 		release_after_one_page(m, std::move(p));
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		const auto start = std::chrono::steady_clock::now();
 		auto r = m.run(m.conn.start_tls());// no limit of its own
 		CHECK(std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(50));// most of the 100 ms
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::unavailable);// sent, and refused
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
 		CHECK(is_start_tls(m.log.received[2]));
@@ -1743,7 +1743,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		auto b = m.run(bind_admin(m.conn));
 		CHECK(b.has_value());
 		CHECK(m.conn.is_open());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 	}
 	SECTION("the release's deadline from connection_options::operation_timeout")
 	{
@@ -1751,9 +1751,9 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{} });// reads the release, never answers
 		release_after_one_page(m);
-		CHECK(m.conn.outstanding() == 1);
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 1);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 	}
 	SECTION("its own timeout, or a stop, ends the wait; nothing is sent")
@@ -1779,10 +1779,10 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		CHECK(tls.get().error().context == "start tls (waiting for the answer to 1 paged search release)");
 
 		CHECK(m.conn.is_open());
-		CHECK(m.conn.outstanding() == 1);// still due
+		CHECK(m.conn.outstanding_count() == 1);// still due
 		server_sends(m, paged_done(2, ""));
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		m.check_server();
 		settle(m);
 		CHECK(m.log.received.size() == 2);// no StartTLS
@@ -1802,7 +1802,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		REQUIRE_FALSE(tls.get().has_value());
 		CHECK(tls.get().error().code == client_errc::not_sent);
 		CHECK(tls.get().error().context == "start tls: connection closed");
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 	}
 	SECTION("unbind while it waits: StartTLS is not sent after the UnbindRequest")
 	{
@@ -1836,7 +1836,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		settle(m);
 		CHECK_FALSE(tls.done());
 		// unbind() waits for the busy writer past StartTLS's timeout.
-		outcome<ldap::result<ldap::response>> add;
+		outcome<ldap::result<ldap::update_result>> add;
 		spawn(m.ioc, m.conn.add(oversized_add()), add);
 		outcome<ldap::result<void>> unbind;
 		spawn(m.ioc, m.conn.unbind(), unbind);
@@ -1871,12 +1871,12 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
-		CHECK(m.conn.outstanding() == 1);
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 1);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		auto r = m.run(m.conn.start_tls());
 		REQUIRE_FALSE(r.has_value());
@@ -1900,7 +1900,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 			REQUIRE(e->has_value());
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::search_stream{}; });
 		}
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 		auto r = m.run(m.conn.start_tls());
 		REQUIRE_FALSE(r.has_value());
@@ -1921,12 +1921,12 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		CHECK(m.run(m.conn.unbind()).has_value());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK_FALSE(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
@@ -1955,7 +1955,7 @@ TEST_CASE("operations: StartTLS after waiting for a release's answer has its who
 	REQUIRE_FALSE(tls.get().has_value());
 	CHECK(tls.get().error().code == errc::unavailable);// answered in time, and refused
 	CHECK(m.conn.is_open());
-	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.outstanding_count() == 0);
 	m.check_server();
 	server_sends(m, bind_resp(4));// answers the bind below before it is read
 	CHECK(m.run(bind_admin(m.conn)).has_value());
@@ -1985,7 +1985,7 @@ TEST_CASE("operations: StartTLS whose wait times out with a release's deadline p
 	REQUIRE_FALSE(tls.get().has_value());
 	CHECK(tls.get().error().code == errc::unavailable);// sent, and refused
 	CHECK(m.conn.is_open());
-	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.outstanding_count() == 0);
 	m.check_server();
 	REQUIRE(m.log.received.size() == 3);
 	CHECK(is_start_tls(m.log.received[2]));
@@ -2006,13 +2006,13 @@ TEST_CASE("operations: a paged search destroyed during StartTLS sends no release
 		auto e = m.run(s->next());
 		REQUIRE(e.has_value());
 		REQUIRE(e->has_value());
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 		REQUIRE(m.log.received.size() == 2);
 		CHECK(is_start_tls(m.log.received[1]));
 	}// page 1 ended with a cookie: a release, if not for StartTLS
-	CHECK(m.conn.outstanding() == 1);// StartTLS only
+	CHECK(m.conn.outstanding_count() == 1);// StartTLS only
 	server_sends(m, start_tls_refused(2));
 	drive_until(m.ioc, [&tls] { return tls.done(); });
 	REQUIRE_FALSE(tls.get().has_value());
@@ -2040,7 +2040,7 @@ TEST_CASE("operations: a paged search whose next page could not be sent releases
 		auto e = m.run(s->next());
 		REQUIRE(e.has_value());
 		REQUIRE(e->has_value());
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 		outcome<ldap::result<ldap::connection>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
@@ -2048,7 +2048,7 @@ TEST_CASE("operations: a paged search whose next page could not be sent releases
 		REQUIRE_FALSE(next.has_value());
 		CHECK(next.error().code == client_errc::operation_in_progress);
 		CHECK(s->done());
-		CHECK(s->pages() == 1);
+		CHECK(s->page_count() == 1);
 		server_sends(m, start_tls_refused(2));
 		drive_until(m.ioc, [&tls] { return tls.done(); });
 		REQUIRE_FALSE(tls.get().has_value());
@@ -2087,10 +2087,10 @@ TEST_CASE("operations: a paged search whose unread page failed sends no release"
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
 		}
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// page 2's done queued, unread
-		CHECK(s->pages() == 2);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });// page 2's done queued, unread
+		CHECK(s->page_count() == 2);
 	}
-	CHECK(m.conn.outstanding() == 0);// nothing due
+	CHECK(m.conn.outstanding_count() == 0);// nothing due
 	auto b = m.run(bind_admin(m.conn));
 	CHECK(b.has_value());
 	m.check_server();
@@ -2114,19 +2114,19 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 		// on a loaded CI runner (ASan, parallel tests).
 		p.timeout = std::chrono::milliseconds(500);
 		release_after_one_page(m, p);
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		while (m.ioc.poll() != 0) {}// the due watcher sees no deadline left, and ends
 		m.ioc.restart();
 		{
 			auto s = m.run(ldap::search_paged_stream(m.conn, p, 1));
 			REQUIRE(s.has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
-		CHECK(m.conn.outstanding() == 1);
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// its deadline passes
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 1);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });// its deadline passes
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 4);
@@ -2145,16 +2145,16 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 			p.timeout = std::chrono::milliseconds(500);// page 3 must arrive before it, even on a loaded runner
 			auto s = m.run(ldap::search_paged_stream(m.conn, std::move(p), 1));
 			REQUIRE(s.has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 1; });// page 3 ended
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
-		CHECK(m.conn.outstanding() == 2);
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() < 2; });// the second's deadline passes
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 2);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() < 2; });// the second's deadline passes
+		CHECK(m.conn.outstanding_count() == 1);
 		m.check_server();
 		server_sends(m, paged_done(2, ""));
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+		CHECK(m.conn.outstanding_count() == 0);
 		// The second release's id is still known: its late answer is dropped.
 		server_sends(m, paged_done(4, ""));
 		server_sends(m, bind_resp(5));// answers the bind below before it is read
@@ -2217,7 +2217,7 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		m.serve({ page(1), step{} });// reads the release
 		m.ioc.set_frame_allocator(&frames);
 		CHECK(release_failing(0) == 9);
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		m.check_server();
 		check_release(m.log.received[1], m.log.received[0], "page2");
 	}
@@ -2226,7 +2226,7 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		m.serve({ page(1), answer({ bind_resp(3) }) });
 		m.ioc.set_frame_allocator(&frames);
 		CHECK(release_failing(1) == 1);
-		CHECK(m.conn.outstanding() == 0);// nothing is due
+		CHECK(m.conn.outstanding_count() == 0);// nothing is due
 		CHECK(m.run(bind_admin(m.conn)).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
@@ -2237,9 +2237,9 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		m.serve({ page(1), answer({ paged_done(2, "") }), answer({ bind_resp(3) }) });
 		m.ioc.set_frame_allocator(&frames);
 		CHECK(release_failing(5) == 5);
-		CHECK(m.conn.outstanding() == 1);// due, not read yet
+		CHECK(m.conn.outstanding_count() == 1);// due, not read yet
 		CHECK(m.run(bind_admin(m.conn)).has_value());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
@@ -2250,18 +2250,18 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		m.serve({ page(1), step{}, page(3), step{} });// reads each release, never answers
 		m.ioc.set_frame_allocator(&frames);
 		CHECK(release_failing(8) == 8);
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		{
 			auto p = people_search();
 			p.timeout = std::chrono::milliseconds(100);
 			auto s = m.run(ldap::search_paged_stream(m.conn, std::move(p), 1));
 			REQUIRE(s.has_value());
-			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended
+			drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 1; });// page 3 ended
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
-		CHECK(m.conn.outstanding() == 2);
-		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// both deadlines pass
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 2);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });// both deadlines pass
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 4);
@@ -2292,12 +2292,12 @@ TEST_CASE("operations: StartTLS waits for a release's answer whose reader could 
 		CHECK(
 		  release_failing(m, frames, 5, std::nullopt) == 5);// the writer's, run_async's, its write's two, the reader's
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		server_sends(m, paged_done(2, ""));
 		auto r = start_tls();
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::unavailable);// sent, and refused
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
@@ -2311,11 +2311,11 @@ TEST_CASE("operations: StartTLS waits for a release's answer whose reader could 
 		CHECK(
 		  release_failing(m, frames, 5, std::chrono::milliseconds(100)) == 5);// the reader's, after the writer's write
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
-		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.conn.outstanding_count() == 1);
 		auto r = start_tls();
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::unavailable);// sent, and refused
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
@@ -2360,7 +2360,7 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		drive_until(m.ioc, [&frames] { return frames.count() == 1; });
 		frames.fail_at(0);
 		CHECK_FALSE(m.conn.is_open());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.outstanding_count() == 0);
 		auto e = m.run(s->next());
 		REQUIRE(e.has_value());
 		CHECK(e->has_value());// received before
@@ -2389,19 +2389,19 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		// The stream is abandoned and an AddRequest registered while the reader
 		// still runs.
 		// NOLINTNEXTLINE(cppcoreguidelines-avoid-capturing-lambda-coroutines): see above
-		auto body = [&] -> capy::task<ldap::result<ldap::response>> {
+		auto body = [&] -> capy::task<ldap::result<ldap::update_result>> {
 			*s = ldap::search_stream{};
 			auto add = t.conn.add({ .entry = jdoe });
 			frames.fail_at(4);// the add's exchange, request_response and next_response, then the new reader's frame
 			co_return co_await std::move(add);
 		};
-		outcome<ldap::result<ldap::response>> add;
+		outcome<ldap::result<ldap::update_result>> add;
 		spawn_on(t.conn.executor(), body(), add);// on the strand: the destructor runs inline
 		drive_until(t.ioc, [&add] { return add.done(); });
 		CHECK(frames.count() == 4);
 		frames.fail_at(0);
 		CHECK_FALSE(t.conn.is_open());
-		CHECK(t.conn.outstanding() == 0);
+		CHECK(t.conn.outstanding_count() == 0);
 		REQUIRE_FALSE(add.get().has_value());
 		CHECK(add.get().error().code == std::errc::not_enough_memory);
 		CHECK(add.get().error().context == "add uid=jdoe,ou=people,dc=example,dc=org");
@@ -2449,7 +2449,7 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		outcome<ldap::result<ldap::connection>> bind;
 		spawn(m.ioc, bind_admin(m.conn), bind);
 		settle_now();// the BindRequest is written
-		outcome<ldap::result<ldap::response>> add;
+		outcome<ldap::result<ldap::update_result>> add;
 		spawn(m.ioc, m.conn.add({ .entry = jdoe }), add);// held
 		settle_now();
 		server_writes_now(m, { bind_resp(1) });
@@ -2481,11 +2481,11 @@ TEST_CASE("operations: a due release answer outlives older abandoned requests", 
 	}// each one abandoned
 	drive_until(m.ioc, [&m] { return m.server.done(); });
 	REQUIRE(m.log.received.size() == 2 + (2 * abandoned_searches));
-	CHECK(m.conn.outstanding() == 1);
+	CHECK(m.conn.outstanding_count() == 1);
 
 	server_sends(m, paged_done(2, ""));// still known: dropped
-	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-	CHECK(m.conn.outstanding() == 0);
+	drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+	CHECK(m.conn.outstanding_count() == 0);
 	CHECK(m.conn.is_open());
 	m.check_server();
 }
@@ -2504,16 +2504,16 @@ TEST_CASE("operations: a due release answer forgotten past the limit is no longe
 	for (int i = 0; i < releases; ++i) {
 		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
-		drive_until(m.ioc, [&m, i] { return m.conn.outstanding() == static_cast<std::size_t>(i); });// page ended
+		drive_until(m.ioc, [&m, i] { return m.conn.outstanding_count() == static_cast<std::size_t>(i); });// page ended
 		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });// released
 	}
-	CHECK(m.conn.outstanding() == releases);
+	CHECK(m.conn.outstanding_count() == releases);
 	{
 		auto s = m.run(m.conn.search_stream(people_search()));
 		REQUIRE(s.has_value());
 		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::search_stream{}; });// abandoned
 	}// the first release (id 2) is forgotten
-	CHECK(m.conn.outstanding() == releases - 1);
+	CHECK(m.conn.outstanding_count() == releases - 1);
 	drive_until(m.ioc, [&m] { return m.server.done(); });
 	REQUIRE(m.log.received.size() == (2 * releases) + 2);
 
@@ -2523,8 +2523,8 @@ TEST_CASE("operations: a due release answer forgotten past the limit is no longe
 	}
 	auto t = m.server_end();
 	REQUIRE(m.run(net::write_bytes(t, std::as_bytes(std::span(answers)))).has_value());
-	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-	CHECK(m.conn.outstanding() == 0);
+	drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
+	CHECK(m.conn.outstanding_count() == 0);
 	CHECK(m.conn.is_open());
 	m.check_server();
 }

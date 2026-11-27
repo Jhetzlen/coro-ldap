@@ -26,7 +26,7 @@ void check_multi(std::string_view text)
 		return;
 	}
 	std::pmr::vector<std::pmr::string> lines;
-	std::vector<ldap::object_class_type> parsed;
+	std::vector<ldap::object_class_description> parsed;
 	for (const auto line : std::views::split(text, '\n')) {
 		lines.emplace_back(std::string_view(line));
 		if (auto lc = ldap::parse_object_class(lines.back())) {
@@ -62,7 +62,7 @@ void check_multi(std::string_view text)
 		}
 		const bool superclass = i.what == ldap::schema_issue::kind::unknown_superclass;
 		check(std::ranges::any_of(parsed,
-				[&](const ldap::object_class_type &pc) {
+				[&](const ldap::object_class_description &pc) {
 					return std::ranges::contains(superclass ? pc.sup : pc.must, i.name);
 				}),
 		  "a MUST issue names a parsed class's MUST entry, a superclass issue a SUP entry");

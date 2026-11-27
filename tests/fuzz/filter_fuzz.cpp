@@ -38,7 +38,7 @@ auto must_decode(std::span<const std::byte> bytes) -> ldap::filter
 
 auto must_parse(std::string_view text) -> ldap::filter
 {
-	auto f = ldap::filter::raw(text);
+	auto f = ldap::filter::parse(text);
 	check(f.has_value(), "f.has_value()");
 	return std::move(*f);
 }
@@ -60,7 +60,7 @@ void check_round_trips(const ldap::filter &f)
 
 void check_text(std::string_view text)
 {
-	auto f = ldap::filter::raw(text);
+	auto f = ldap::filter::parse(text);
 	if (!f) {
 		check(
 		  f.error().code == ldap::client_errc::invalid_filter, "f.error().code == ldap::client_errc::invalid_filter");
@@ -128,7 +128,7 @@ void check_unescape(std::string_view text)
 		return;// a substring filter in raw
 	}
 	const auto u = ldap::unescape_filter_value(text);
-	const auto f = ldap::filter::raw("(cn=" + std::string(text) + ")");
+	const auto f = ldap::filter::parse("(cn=" + std::string(text) + ")");
 	check(u.has_value() == f.has_value(), "u.has_value() == f.has_value()");
 	if (!u) {
 		check(

@@ -834,13 +834,13 @@ const ldap::dn typed_user{ "CN=coro-typed,CN=Users,DC=coro,DC=test" };
 }// namespace
 
 template<>
-constexpr auto ldap::schema<ad_account> = ldap::describe(ldap::object_class("user"),
+constexpr auto ldap::mapping<ad_account> = ldap::describe(ldap::object_class("user"),
   ldap::field<&ad_account::sam_account_name>("sAMAccountName"),
   ldap::field<&ad_account::object_sid>("objectSid", ldap::read_only),
   ldap::field<&ad_account::object_guid>("objectGUID", ldap::read_only),
   ldap::field<&ad_account::user_account_control>("userAccountControl"));
 template<>
-constexpr auto ldap::schema<ad_aux_account> = ldap::describe(ldap::object_class("user"),
+constexpr auto ldap::mapping<ad_aux_account> = ldap::describe(ldap::object_class("user"),
   ldap::auxiliary_class("posixAccount", "ipHost"),
   ldap::field<&ad_aux_account::sam_account_name>("sAMAccountName"));
 
@@ -1203,7 +1203,7 @@ struct ranged_group
 }// namespace
 
 template<>
-constexpr auto ldap::schema<ranged_group> = ldap::describe(ldap::object_class("group"),
+constexpr auto ldap::mapping<ranged_group> = ldap::describe(ldap::object_class("group"),
   ldap::field<&ranged_group::cn>("cn"),
   ldap::field<&ranged_group::member>("member"));
 

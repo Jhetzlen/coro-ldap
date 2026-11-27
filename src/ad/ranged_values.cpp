@@ -68,18 +68,18 @@ namespace {
 
 	struct answer
 	{
-		attribute_values *values = nullptr;
+		attribute *values = nullptr;
 		std::optional<ranged_description> ranged{};
 	};
 
 	struct returned
 	{
-		attribute_values *values = nullptr;
+		attribute *values = nullptr;
 		std::optional<ranged_description> ranged{};
 
 		[[nodiscard]] auto base() const -> std::string_view
 		{
-			return ranged ? std::string_view(ranged->type) : std::string_view(values->type.name());
+			return ranged ? std::string_view(ranged->type) : std::string_view(values->type.text());
 		}
 	};
 
@@ -91,7 +91,7 @@ namespace {
 		std::vector<returned> all;
 		all.reserve(e.attributes.size());
 		for (auto &a : e.attributes) {
-			auto ranged = parse_range(a.type.name());
+			auto ranged = parse_range(a.type.text());
 			if (!ranged) {
 				return std::unexpected(detail::with_context(std::move(ranged.error()), r.context));
 			}
@@ -170,12 +170,12 @@ namespace {
 		if (got.low != low) {
 			return fail(client_errc::unexpected_response,
 			  r.context + ": asked for the values from " + std::to_string(low) + ", got "
-				+ std::string(found->values->type.name()));
+				+ std::string(found->values->type.text()));
 		}
 		if (got.high && values.size() > std::uint64_t{ *got.high } - got.low + 1) {
 			return fail(client_errc::unexpected_response,
 			  r.context + ": " + std::to_string(values.size()) + " values in the window "
-				+ std::string(found->values->type.name()));
+				+ std::string(found->values->type.text()));
 		}
 		append();
 		type = std::move(found->ranged->type);

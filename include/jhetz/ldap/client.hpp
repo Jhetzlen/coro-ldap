@@ -125,8 +125,8 @@ struct referral_hop
 	url origin{};// lease::server()
 };
 
-enum class referral_binding : std::uint8_t {
-	refuse,// the URI is skipped (referral_outcome::skipped_policy)
+enum class referral_access : std::uint8_t {
+	refuse,// the URI is skipped (referral_outcome::refused)
 	// Connected, not bound, without the client's TLS certificate.
 	anonymous,
 	// Connected and set up with client_options::setup and its TLS certificate.
@@ -134,7 +134,7 @@ enum class referral_binding : std::uint8_t {
 };
 
 // Decides for each referred server, on the client's executor.
-using referral_authorizer = std::function<referral_binding(const referral_hop &hop)>;
+using referral_authorizer = std::function<referral_access(const referral_hop &hop)>;
 
 // same_setup for the hosts of `domains` (and their subdomains), refusal for
 // the others, by make_same_policy_connector's allow-list rules. Empty:
@@ -150,12 +150,12 @@ struct referral_options
 	bool follow_references = false;
 	// Empty: no server is contacted.
 	referral_authorizer authorize{};
-	referral_policy limits{};
+	referral_limits limits{};
 };
 
 struct client_options
 {
-	static constexpr std::chrono::milliseconds default_idle_check{ 60'000 };
+	static constexpr std::chrono::milliseconds default_probe_idle_after{ 60'000 };
 	static constexpr std::chrono::milliseconds default_acquire_timeout{ 30'000 };
 	static constexpr std::chrono::milliseconds default_failback_after{ 300'000 };
 	static constexpr std::chrono::milliseconds default_probe_timeout{ 5'000 };
@@ -171,7 +171,7 @@ struct client_options
 	// At least 1.
 	std::size_t max_connections = 1;
 	// Probe an idle connection unused for longer than this; nullopt: never.
-	std::optional<std::chrono::milliseconds> idle_check{ default_idle_check };
+	std::optional<std::chrono::milliseconds> probe_idle_after{ default_probe_idle_after };
 	// Bounds the idle check.
 	std::chrono::milliseconds probe_timeout{ default_probe_timeout };
 	// Age after which a connection is no longer handed out; nullopt: no limit.
@@ -314,16 +314,16 @@ class client
 
 	// Write forwarders: retried once only after client_errc::not_sent. The
 	// tasks do not refer to *this.
-	auto add(add_params request) -> boost::capy::task<result<response>>;
-	auto modify(modify_params request) -> boost::capy::task<result<response>>;
-	auto del(del_params request) -> boost::capy::task<result<response>>;
-	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
+	auto add(add_params request) -> boost::capy::task<result<update_result>>;
+	auto modify(modify_params request) -> boost::capy::task<result<update_result>>;
+	auto del(del_params request) -> boost::capy::task<result<update_result>>;
+	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<update_result>>;
 	// Any extended operation but StartTLS, as a write forwarder; a referral
 	// result is an error, never chased.
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 
 	// Pooled connections, open or retired (not those being opened).
-	[[nodiscard]] auto connections() const noexcept -> std::size_t;
+	[[nodiscard]] auto connection_count() const noexcept -> std::size_t;
 
 	// Closes every pooled connection, stops attempts in progress and fails
 	// acquire() calls with not_connected. Idempotent.

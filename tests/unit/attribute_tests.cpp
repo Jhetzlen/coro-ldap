@@ -143,9 +143,19 @@ TEST_CASE("valid attribute descriptions", "[attribute]")
 	  "0.0",
 	  "10.20;x");
 	INFO(good);
-	auto a = ldap::attribute::parse(good);
+	auto a = ldap::attribute_description::parse(good);
 	REQUIRE(a);
-	CHECK(a->name() == std::string_view(good));
+	CHECK(a->text() == std::string_view(good));
+}
+
+TEST_CASE("attribute::name is the type without options, text the whole description", "[attribute]")
+{
+	CHECK(ldap::attribute_description{ "cn" }.name() == "cn");
+	CHECK(ldap::attribute_description{ "cn;lang-de" }.name() == "cn");
+	CHECK(ldap::attribute_description{ "cn;lang-de" }.text() == "cn;lang-de");
+	CHECK(ldap::attribute_description{ "userCertificate;binary" }.name() == "userCertificate");
+	CHECK(ldap::attribute_description{ "2.5.4.3;x" }.name() == "2.5.4.3");
+	CHECK(ldap::attribute_description{}.name().empty());
 }
 
 TEST_CASE("invalid attribute descriptions", "[attribute]")
@@ -168,16 +178,16 @@ TEST_CASE("invalid attribute descriptions", "[attribute]")
 	  "cn=x",
 	  "member;range=0-1499");
 	INFO(bad);
-	auto b = ldap::attribute::parse(bad);
+	auto b = ldap::attribute_description::parse(bad);
 	REQUIRE_FALSE(b);
 	CHECK(b.error().code == client_errc::invalid_attribute);
 }
 
-TEST_CASE("attribute::parse shows its input sanitized", "[attribute]")
+TEST_CASE("attribute_description::parse shows its input sanitized", "[attribute]")
 {
 	const std::string fffd = "\xEF\xBF\xBD";// U+FFFD
 	const auto context = [](std::string_view text) {
-		auto r = ldap::attribute::parse(text);
+		auto r = ldap::attribute_description::parse(text);
 		REQUIRE_FALSE(r);
 		return std::string(r.error().context);
 	};
@@ -367,33 +377,34 @@ TEST_CASE("ci_hash is seeded: names crafted to collide under a fixed start sprea
 
 TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")
 {
-	const ldap::attribute a{ "objectClass" };
-	const ldap::attribute b = *ldap::attribute::parse("OBJECTCLASS");
+	const ldap::attribute_description a{ "objectClass" };
+	const ldap::attribute_description b = *ldap::attribute_description::parse("OBJECTCLASS");
 	CHECK(a == b);
-	CHECK(a.name() == "objectClass");// spelling kept
-	CHECK(std::hash<ldap::attribute>{}(a) == std::hash<ldap::attribute>{}(b));
-	CHECK(a != ldap::attribute{ "objectClasses" });
-	CHECK(ldap::attribute{ "cn;LANG-EN" } == ldap::attribute{ "CN;lang-en" });
-	CHECK(ldap::attribute{ "cn" } != ldap::attribute{ "cn;lang-en" });
+	CHECK(a.text() == "objectClass");// spelling kept
+	CHECK(std::hash<ldap::attribute_description>{}(a) == std::hash<ldap::attribute_description>{}(b));
+	CHECK(a != ldap::attribute_description{ "objectClasses" });
+	CHECK(ldap::attribute_description{ "cn;LANG-EN" } == ldap::attribute_description{ "CN;lang-en" });
+	CHECK(ldap::attribute_description{ "cn" } != ldap::attribute_description{ "cn;lang-en" });
 
-	CHECK(ldap::attribute{ "a" } < ldap::attribute{ "B" });
-	CHECK(ldap::attribute{ "B" } > ldap::attribute{ "a" });
-	CHECK(ldap::attribute{ "cn" } < ldap::attribute{ "cn;x" });
+	CHECK(ldap::attribute_description{ "a" } < ldap::attribute_description{ "B" });
+	CHECK(ldap::attribute_description{ "B" } > ldap::attribute_description{ "a" });
+	CHECK(ldap::attribute_description{ "cn" } < ldap::attribute_description{ "cn;x" });
 	// Not `== 0`: Catch2's decomposer would pass the 0 as an int, which
 	// MSVC's comparison operators (taking a literal zero) refuse.
-	CHECK((ldap::attribute{ "CN" } <=> ldap::attribute{ "cn" }) == std::weak_ordering::equivalent);
+	CHECK(
+	  (ldap::attribute_description{ "CN" } <=> ldap::attribute_description{ "cn" }) == std::weak_ordering::equivalent);
 
-	std::unordered_set<ldap::attribute> set{
-		ldap::attribute{ "mail" }, ldap::attribute{ "MAIL" }, ldap::attribute{ "cn" }
-	};
+	std::unordered_set<ldap::attribute_description> set{ ldap::attribute_description{ "mail" },
+		ldap::attribute_description{ "MAIL" },
+		ldap::attribute_description{ "cn" } };
 	CHECK(set.size() == 2);
-	std::map<ldap::attribute, int> ordered{ { ldap::attribute{ "Mail" }, 1 } };
-	CHECK(ordered.count(ldap::attribute{ "mail" }) == 1);
+	std::map<ldap::attribute_description, int> ordered{ { ldap::attribute_description{ "Mail" }, 1 } };
+	CHECK(ordered.count(ldap::attribute_description{ "mail" }) == 1);
 
 	// Server-supplied names are kept as sent.
-	const auto range = ldap::attribute::unchecked("member;range=0-1499");
-	CHECK(range.name() == "member;range=0-1499");
-	CHECK(range == ldap::attribute::unchecked("MEMBER;RANGE=0-1499"));
+	const auto range = ldap::attribute_description::unchecked("member;range=0-1499");
+	CHECK(range.text() == "member;range=0-1499");
+	CHECK(range == ldap::attribute_description::unchecked("MEMBER;RANGE=0-1499"));
 }
 
 TEST_CASE("entry from a search result entry", "[entry]")
@@ -408,13 +419,13 @@ TEST_CASE("entry from a search result entry", "[entry]")
 	const auto x = ldap::entry::from(e);
 	CHECK(x.dn == "uid=jdoe,dc=example,dc=org");
 	REQUIRE(x.attributes.size() == 5);
-	CHECK(x.attributes[0].type.name() == "cn");
-	CHECK(x.attributes[1].type.name() == "objectClass");
+	CHECK(x.attributes[0].type.text() == "cn");
+	CHECK(x.attributes[1].type.text() == "objectClass");
 
 	const auto *cn = x.find("CN");
 	REQUIRE(cn != nullptr);
 	CHECK(*cn == ldap::string_list{ "John", "Johnny", "J" });
-	CHECK(x.find(ldap::attribute{ "OBJECTCLASS" }) == &x.attributes[1].values);
+	CHECK(x.find(ldap::attribute_description{ "OBJECTCLASS" }) == &x.attributes[1].values);
 	CHECK(x.find("jpegphoto")->front() == "\xff\xd8\0\x01"sv);
 	CHECK(x.find("member;range=0-1499") != nullptr);
 	CHECK(x.find("member") == nullptr);

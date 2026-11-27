@@ -90,8 +90,8 @@ auto same_setup_for_domains(std::vector<std::string> domains) -> referral_author
 		if (hop.origin.scheme() != url_scheme::ldapi) {
 			origin_port = hop.origin.port_or_default();
 		}
-		return detail::referral_server_allowed(hop.target, domains, origin_port) ? referral_binding::same_setup
-																				 : referral_binding::refuse;
+		return detail::referral_server_allowed(hop.target, domains, origin_port) ? referral_access::same_setup
+																				 : referral_access::refuse;
 	};
 }
 
@@ -117,15 +117,15 @@ namespace detail {
 		return milliseconds(static_cast<milliseconds::rep>(cap * unit));
 	}
 
-	auto client_referral_identity(referral_binding binding, const session_setup &client_setup)
+	auto client_referral_identity(referral_access binding, const session_setup &client_setup)
 	  -> std::optional<referral_identity>
 	{
 		switch (binding) {
-		case referral_binding::anonymous:
+		case referral_access::anonymous:
 			return referral_identity{ .identity = 0 };
-		case referral_binding::same_setup:
+		case referral_access::same_setup:
 			return referral_identity{ .identity = 1, .setup = client_setup, .client_certificate = true };
-		case referral_binding::refuse:
+		case referral_access::refuse:
 			break;
 		}
 		return std::nullopt;
@@ -367,7 +367,7 @@ namespace detail {
 		const client_options *options;
 		const server_health *health;
 		std::vector<std::shared_ptr<pooled_connection>> conns{};
-		std::atomic<std::size_t> size = 0;// conns.size(), for client::connections() on any thread
+		std::atomic<std::size_t> size = 0;// conns.size(), for client::connection_count() on any thread
 		std::size_t opening = 0;// connection attempts in progress (they count against max_connections)
 		// Exclusive acquires waiting: shared ones leave idle connections to them.
 		std::size_t exclusive_waiting = 0;
@@ -592,7 +592,7 @@ namespace detail {
 
 		[[nodiscard]] auto needs_probe(const pooled_connection &c, clock::time_point now) const noexcept -> bool
 		{
-			return c.leases == 0 && options->idle_check && now - c.last_used >= *options->idle_check;
+			return c.leases == 0 && options->probe_idle_after && now - c.last_used >= *options->probe_idle_after;
 		}
 
 		// A lease returned.
@@ -1252,7 +1252,7 @@ namespace detail {
 
 		// `op` on a shared lease, retried once on another connection only if its
 		// request never reached the writer.
-		template<class T = response, class Op> auto forward_write(state_ptr self, Op op) -> capy::task<result<T>>
+		template<class T = update_result, class Op> auto forward_write(state_ptr self, Op op) -> capy::task<result<T>>
 		{
 			return retry_once_on_lease<T>(
 			  acquire_lease<lease>(std::move(self)),
@@ -1508,10 +1508,10 @@ namespace {
 
 	// Not a coroutine: the task holds its own copy of the state.
 	template<class Params>
-	auto update(const std::shared_ptr<detail::client_state> &state, Params request) -> capy::task<result<response>>
+	auto update(const std::shared_ptr<detail::client_state> &state, Params request) -> capy::task<result<update_result>>
 	{
 		if (state == nullptr) {
-			return detail::failed_task<response>(moved_from(detail::update_context(request)));
+			return detail::failed_task<update_result>(moved_from(detail::update_context(request)));
 		}
 		return detail::on_strand(
 		  state->strand, detail::forward_write(state, [request = std::move(request)](const lease &held) {
@@ -1579,16 +1579,16 @@ auto client::compare(compare_params request) -> capy::task<result<compare_result
 		state_, [request = std::move(request)](const lease &held) { return held->compare(request); }));
 }
 
-auto client::add(add_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
+auto client::add(add_params request) -> capy::task<result<update_result>> { return update(state_, std::move(request)); }
 
-auto client::modify(modify_params request) -> capy::task<result<response>>
+auto client::modify(modify_params request) -> capy::task<result<update_result>>
 {
 	return update(state_, std::move(request));
 }
 
-auto client::del(del_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
+auto client::del(del_params request) -> capy::task<result<update_result>> { return update(state_, std::move(request)); }
 
-auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
+auto client::modify_dn(modify_dn_params request) -> capy::task<result<update_result>>
 {
 	return update(state_, std::move(request));
 }
@@ -1603,7 +1603,7 @@ auto client::extended(extended_params request) -> capy::task<result<extended_res
 		state_, [request = std::move(request)](const lease &held) { return held->extended(request); }));
 }
 
-auto client::connections() const noexcept -> std::size_t
+auto client::connection_count() const noexcept -> std::size_t
 {
 	return state_ == nullptr ? 0 : state_->pool.size.load(std::memory_order_relaxed);
 }

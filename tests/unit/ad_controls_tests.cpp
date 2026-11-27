@@ -25,7 +25,7 @@ TEST_CASE("ad::show_deleted: the control (MS-ADTS 3.1.1.3.4.1.14)", "[ad][contro
 	// Controls [0] SEQUENCE { LDAPOID, criticality TRUE }, no controlValue.
 	const auto bytes = ldap::encode(ldap::message{ 1,
 	  ldap::search_request{
-		"DC=example,DC=org", ldap::search_scope::whole_subtree, ldap::filter::raw("(isDeleted=TRUE)").value() },
+		"DC=example,DC=org", ldap::search_scope::whole_subtree, ldap::filter::parse("(isDeleted=TRUE)").value() },
 	  { ad::show_deleted{} } });
 	REQUIRE(bytes.has_value());
 	const std::string tail =

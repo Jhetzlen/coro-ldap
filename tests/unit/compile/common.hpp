@@ -22,7 +22,7 @@ struct person
 };
 
 template<>
-constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<person> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&person::uid>("uid"),
   ldap::field<&person::mail>("mail"),
   ldap::field<&person::member_of>("memberOf"),
@@ -34,4 +34,4 @@ struct device
 	std::string cn;
 };
 
-template<> constexpr auto ldap::schema<device> = ldap::describe(ldap::field<&device::cn>("cn"));
+template<> constexpr auto ldap::mapping<device> = ldap::describe(ldap::field<&device::cn>("cn"));

@@ -492,7 +492,7 @@ struct ad_pool
 	// is opened as `how[n]` says, normally past its end.
 	void make(std::vector<opened> how = {}, std::string_view scheme = "ldaps")
 	{
-		ldap::client_options o{ .servers = { server.url(scheme) }, .idle_check = std::nullopt };
+		ldap::client_options o{ .servers = { server.url(scheme) }, .probe_idle_after = std::nullopt };
 		o.connection.tls.ca_pem = std::pmr::string(pki().ca_pem());
 		pool.emplace(ioc, std::move(o));
 		ldap::detail::test_access::set_connector(*pool,
@@ -518,7 +518,7 @@ TEST_CASE("ad::change_password on a client: a shared lease", "[net][password][ad
 	CHECK(f.run(ldap::ad::change_password(*f.pool, jdoe, old_pw, new_pw)).has_value());
 	CHECK(f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw)).has_value());
 	CHECK(f.server.accepted() == 1);
-	CHECK(f.pool->connections() == 1);
+	CHECK(f.pool->connection_count() == 1);
 	CHECK_THAT(f.server.log(0).error, IsEmpty());
 	REQUIRE(f.server.log(0).received.size() == 2);
 	check_change_shape(f.server.log(0).received[0]);
@@ -550,7 +550,7 @@ TEST_CASE("ad::change_password on a client: not_sent is retried once on another 
 		CHECK(f.server.log(0).received.empty());
 		REQUIRE(f.server.log(1).received.size() == 1);
 		check_reset_shape(f.server.log(1).received[0]);
-		CHECK(f.pool->connections() == 1);
+		CHECK(f.pool->connection_count() == 1);
 	}
 	SECTION("a second not_sent is returned as is")
 	{
@@ -590,7 +590,7 @@ TEST_CASE("ad::change_password on a client: failures not retried", "[net][passwo
 		drive_until(f.ioc, [&f] { return f.server.accepted() == 1; });
 		CHECK(f.server.accepted() == 1);
 		CHECK(f.server.log(0).received.empty());
-		CHECK(f.pool->connections() == 1);
+		CHECK(f.pool->connection_count() == 1);
 	}
 	SECTION("an empty DN: refused before acquiring")
 	{
@@ -600,7 +600,7 @@ TEST_CASE("ad::change_password on a client: failures not retried", "[net][passwo
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == client_errc::invalid_dn);
 		CHECK(f.server.accepted() == 0);
-		CHECK(f.pool->connections() == 0);
+		CHECK(f.pool->connection_count() == 0);
 	}
 	SECTION("a server refusal")
 	{

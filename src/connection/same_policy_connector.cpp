@@ -283,7 +283,7 @@ namespace detail {
 		if (origin.is_tls() || origin.security_layer() == sasl_protection::confidentiality) {
 			return true;
 		}
-		const auto u = url::parse(origin.name());
+		const auto u = url::parse(origin.endpoint());
 		return u && u->scheme() == url_scheme::ldapi;
 	}
 
@@ -325,14 +325,14 @@ namespace detail {
 auto make_same_policy_connector(corosio::io_context &ioc,
   const connection &origin,
   connection_options options,
-  std::vector<std::string> allowed_host_suffixes,
+  std::vector<std::string> allowed_domains,
   session_setup setup) -> referral_connector
 {
 	std::optional<std::uint16_t> origin_port;
-	if (const auto u = url::parse(origin.name()); u && u->scheme() != url_scheme::ldapi) {
+	if (const auto u = url::parse(origin.endpoint()); u && u->scheme() != url_scheme::ldapi) {
 		origin_port = u->port_or_default();
 	}
-	auto choose = [allowed = std::move(allowed_host_suffixes), origin_port, setup = std::move(setup)](
+	auto choose = [allowed = std::move(allowed_domains), origin_port, setup = std::move(setup)](
 					const url &target, std::size_t /*depth*/) -> std::optional<detail::referral_identity> {
 		if (!detail::referral_server_allowed(target, allowed, origin_port)) {
 			return std::nullopt;

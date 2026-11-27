@@ -220,7 +220,7 @@ class server_certificate_swapped
 	}
 
   private:
-	auto set(const std::string &cert_file, const std::string &key_file) -> ldap::result<ldap::response>
+	auto set(const std::string &cert_file, const std::string &key_file) -> ldap::result<ldap::update_result>
 	{
 		return finish(*ioc_,
 		  config_.modify({ .object = config_dn,
@@ -563,7 +563,7 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 		++paged;
 	}
 	CHECK(paged == 250);
-	CHECK(p->pages() == 7);
+	CHECK(p->page_count() == 7);
 
 	// The server's size limit (1000) is not hit, a client one is.
 	auto limited = finish(ioc, c.search({ .base = people, .size_limit = 5 }));
@@ -644,13 +644,13 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
 		}
-		drive_until(ioc, [&c] { return c.outstanding() == 0; });
-		CHECK(p->pages() == 1);
+		drive_until(ioc, [&c] { return c.outstanding_count() == 0; });
+		CHECK(p->page_count() == 1);
 		run_on(ioc, c.executor(), [&p] { *p = ldap::paged_search{}; });
 	}
-	CHECK(c.outstanding() == 1);// the release
+	CHECK(c.outstanding_count() == 1);// the release
 	REQUIRE(finish(ioc, c.start_tls(trusting().tls)).has_value());
-	CHECK(c.outstanding() == 0);
+	CHECK(c.outstanding_count() == 0);
 	CHECK(c.is_tls());
 	auto all = finish(ioc, c.search(all_users));
 	REQUIRE(all.has_value());
@@ -698,7 +698,7 @@ struct person
 }// namespace
 
 template<>
-constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
+constexpr auto ldap::mapping<person> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
   ldap::field<&person::uid>("uid"),
   ldap::field<&person::cn>("cn"),
   ldap::field<&person::mail>("mail"),
@@ -761,11 +761,11 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 		  ldap::mod::replace("cn", { "Renamed Integration" }),
 		  ldap::mod::increment("uidNumber", "5") } }))
 		.has_value());
-	CHECK(
-	  finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "b@example.org" })).value().value == true);
-	CHECK(
-	  finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "a@example.org" })).value().value == false);
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "uidNumber", .value = "505" })).value().value == true);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "b@example.org" })).value().matched
+		  == true);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "a@example.org" })).value().matched
+		  == false);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "uidNumber", .value = "505" })).value().matched == true);
 
 	const ldap::dn renamed = *ldap::dn::parse("uid=" + name + "-r,ou=people,dc=example,dc=org");
 	REQUIRE(finish(ioc, c.modify_dn({ .entry = entry, .new_rdn = renamed.rdns().front() })).has_value());
@@ -815,8 +815,9 @@ TEST_CASE("integration: modify DN to another OU and back, then rename", "[integr
 	const ldap::dn renamed = people.child(new_rdn).value();
 	REQUIRE(finish(ioc, c.modify_dn({ .entry = entry, .new_rdn = new_rdn, .delete_old_rdn = false })).has_value());
 	CHECK_FALSE(exists(entry));
-	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name })).value().value == true);
-	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name + "-r" })).value().value == true);
+	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name })).value().matched == true);
+	CHECK(
+	  finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name + "-r" })).value().matched == true);
 	auto taken = finish(ioc, c.modify_dn({ .entry = renamed, .new_rdn = ldap::rdn{ "uid=user001" } }));// a fixture user
 	REQUIRE_FALSE(taken.has_value());
 	CHECK(taken.error().code == ldap::errc::entry_already_exists);
@@ -881,7 +882,7 @@ TEST_CASE("integration: assertion and pre/post-read controls", "[integration][co
 		.controls = { ldap::assertion{ .filter = attr("sn") == before_sn } } }));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::errc::assertion_failed);
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "sn", .value = after_sn })).value().value == true);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "sn", .value = after_sn })).value().matched == true);
 	// On a search the assertion applies to the base entry.
 	auto search_refused = finish(ioc,
 	  c.search({ .base = entry,
@@ -1052,7 +1053,7 @@ TEST_CASE("integration: matched values", "[integration][controls]")
 			.filter = attr("uid") == "user001",
 			.attributes = { "cn", "uid" },
 			.controls = { ldap::matched_values{
-			  .values_return_filter = { ldap::filter::raw(std::string("(cn:caseExactMatch:=") + value + ")").value(),
+			  .values_return_filter = { ldap::filter::parse(std::string("(cn:caseExactMatch:=") + value + ")").value(),
 				attr("uid").present() } } } }));
 		REQUIRE(r.has_value());
 		REQUIRE(r->entries.size() == 1);
@@ -1099,7 +1100,7 @@ TEST_CASE("integration: the relax rules control", "[integration][controls]")
 		.changes = { ldap::mod::replace("createTimestamp", { migrated }) },
 		.controls = { ldap::relax_rules{} } }));
 	REQUIRE(relaxed.has_value());
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "createTimestamp", .value = migrated })).value().value
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "createTimestamp", .value = migrated })).value().matched
 		  == true);
 
 	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
@@ -1599,9 +1600,9 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 		CHECK(uids[0] == descending_uids(0, 0, 100));
 		CHECK(uids[1] == descending_uids(1, 0, 100));
 		CHECK(uids[2] == descending_uids(2, 50, 50));
-		CHECK(searches[0].pages() == 5);
-		CHECK(searches[1].pages() == 5);
-		CHECK(searches[2].pages() == 3);
+		CHECK(searches[0].page_count() == 5);
+		CHECK(searches[1].page_count() == 5);
+		CHECK(searches[2].page_count() == 3);
 	}
 }
 
@@ -1724,8 +1725,8 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		CHECK(again.error().code == ldap::cond::already_exists);
 		REQUIRE(
 		  c.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "sync@example.org" }) } }).has_value());
-		CHECK(c.compare({ .entry = entry, .attribute = "mail", .value = "sync@example.org" }).value().value == true);
-		CHECK(c.compare({ .entry = entry, .attribute = "sn", .value = "Zoe" }).value().value == false);
+		CHECK(c.compare({ .entry = entry, .attribute = "mail", .value = "sync@example.org" }).value().matched == true);
+		CHECK(c.compare({ .entry = entry, .attribute = "sn", .value = "Zoe" }).value().matched == false);
 		auto pw = ldap::sync::password_modify(c, { .user = std::string(entry.to_string()) });
 		REQUIRE(pw.has_value());
 		CHECK(pw->has_value());
@@ -1865,7 +1866,7 @@ TEST_CASE("integration: cancellation mid-search", "[integration]")
 		{ .base = ldap::dn{ "uid=user001,ou=people,dc=example,dc=org" }, .scope = ldap::search_scope::base_object }));
 	REQUIRE(after.has_value());
 	CHECK(after->entries.size() == 1);
-	CHECK(c.outstanding() == 0);
+	CHECK(c.outstanding_count() == 0);
 }
 
 // ---------------------------------------------------------------- fault injection
@@ -2105,7 +2106,7 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 
 	REQUIRE(finish(ioc, pool.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "pool@example.org" }) } }))
 		.has_value());
-	CHECK(finish(ioc, pool.compare({ .entry = entry, .attribute = "mail", .value = "pool@example.org" }))->value);
+	CHECK(finish(ioc, pool.compare({ .entry = entry, .attribute = "mail", .value = "pool@example.org" }))->matched);
 
 	REQUIRE(finish(ioc, pool.modify_dn({ .entry = entry, .new_rdn = entry.rdns().front(), .new_superior = groups }))
 		.has_value());
@@ -2122,13 +2123,13 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	REQUIRE(finish(
 	  ioc, pool.modify({ .object = renamed, .changes = { ldap::mod::replace("mail", { "plain@example.org" }) } }))
 		.has_value());
-	CHECK(finish(ioc, pool.compare({ .entry = renamed, .attribute = "mail", .value = "plain@example.org" }))->value);
+	CHECK(finish(ioc, pool.compare({ .entry = renamed, .attribute = "mail", .value = "plain@example.org" }))->matched);
 
 	REQUIRE(finish(ioc, pool.del({ .entry = renamed })).has_value());
 	auto gone = finish(ioc, pool.del({ .entry = renamed }));
 	REQUIRE_FALSE(gone.has_value());
 	CHECK(gone.error().code == ldap::errc::no_such_object);
-	CHECK(pool.connections() == 1);
+	CHECK(pool.connection_count() == 1);
 	pool.close();
 	drive(ioc);
 }
@@ -2146,7 +2147,7 @@ struct staff
 }// namespace
 
 template<>
-constexpr auto ldap::schema<staff> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<staff> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&staff::uid>("uid"),
   ldap::field<&staff::cn>("cn"),
   ldap::field<&staff::sn>("sn"),
@@ -2178,7 +2179,7 @@ TEST_CASE("integration: search_paged over ldap::client", "[integration][client]"
 		++paged;
 	}
 	CHECK(paged == 250);
-	CHECK(p->pages() == 7);
+	CHECK(p->page_count() == 7);
 }
 
 TEST_CASE("integration: ldap::repository over ldap::client", "[integration][client][repository]")
@@ -2275,7 +2276,7 @@ struct contact
 }// namespace
 
 template<>
-constexpr auto ldap::schema<contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&contact::uid>("uid"),
   ldap::field<&contact::cn>("cn"),
   ldap::field<&contact::sn>("sn"),
@@ -2378,7 +2379,7 @@ struct photo_album
 }// namespace
 
 template<>
-constexpr auto ldap::schema<photo_album> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<photo_album> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&photo_album::uid>("uid"),
   ldap::field<&photo_album::cn>("cn"),
   ldap::field<&photo_album::sn>("sn"),
@@ -2441,7 +2442,7 @@ struct posix_user
 }// namespace
 
 template<>
-constexpr auto ldap::schema<posix_user> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<posix_user> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::auxiliary_class("posixAccount", "shadowAccount"),
   ldap::field<&posix_user::uid>("uid"),
   ldap::field<&posix_user::cn>("cn"),
@@ -2520,7 +2521,7 @@ struct versioned_contact
 }// namespace
 
 template<>
-constexpr auto ldap::schema<versioned_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<versioned_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&versioned_contact::uid>("uid"),
   ldap::field<&versioned_contact::cn>("cn"),
   ldap::field<&versioned_contact::sn>("sn"),
@@ -2626,7 +2627,7 @@ struct photo_contact
 }// namespace
 
 template<>
-constexpr auto ldap::schema<photo_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<photo_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&photo_contact::uid>("uid"),
   ldap::field<&photo_contact::cn>("cn"),
   ldap::field<&photo_contact::sn>("sn"),
@@ -2711,7 +2712,7 @@ struct tagged_contact
 }// namespace
 
 template<>
-constexpr auto ldap::schema<tagged_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<tagged_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&tagged_contact::uid>("uid"),
   ldap::field<&tagged_contact::cn>("cn"),
   ldap::field<&tagged_contact::sn>("sn"),
@@ -2844,7 +2845,7 @@ class password_write_only
 	}
 
   private:
-	auto set(std::initializer_list<std::string_view> rules) -> ldap::result<ldap::response>
+	auto set(std::initializer_list<std::string_view> rules) -> ldap::result<ldap::update_result>
 	{
 		return finish(
 		  *ioc_, config_.modify({ .object = database_dn, .changes = { ldap::mod::replace("olcAccess", rules) } }));
@@ -2858,14 +2859,14 @@ class password_write_only
 }// namespace
 
 template<>
-constexpr auto ldap::schema<password_holder> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<password_holder> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&password_holder::uid>("uid"),
   ldap::field<&password_holder::cn>("cn"),
   ldap::field<&password_holder::sn>("sn"),
   ldap::field<&password_holder::password>("userPassword"));
 
 template<>
-constexpr auto ldap::schema<surname_holder> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<surname_holder> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&surname_holder::uid>("uid"),
   ldap::field<&surname_holder::surname>("surname"));
 
@@ -2951,7 +2952,7 @@ struct english_named
 }// namespace
 
 template<>
-constexpr auto ldap::schema<english_named> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<english_named> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&english_named::uid>("uid"),
   ldap::field<&english_named::english_cn>("cn;lang-en"));
 
@@ -2998,7 +2999,7 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 		  { .servers = { *u },
 			.connection = trusting(),
 			.setup = ldap::simple_bind_setup(admin, "secret"),
-			.idle_check = std::chrono::milliseconds(0) });
+			.probe_idle_after = std::chrono::milliseconds(0) });
 		{
 			auto l = finish(ioc, pool.acquire());
 			REQUIRE(l.has_value());
@@ -3015,7 +3016,7 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 			REQUIRE(entries.has_value());
 			CHECK(entries->entries.size() == 1);
 		}
-		CHECK(pool.connections() == 1);
+		CHECK(pool.connection_count() == 1);
 	}
 	r.shut_down();
 	drive(ioc);
@@ -3047,7 +3048,7 @@ template<class D> auto threaded_worker(D &d, std::string name, int rounds, std::
 				   { "sn", { "T" } } } }))
 			.has_value());
 		auto same = co_await d.compare({ .entry = entry, .attribute = "cn", .value = "T" });
-		check(same && same->value);
+		check(same && same->matched);
 		check((co_await d.modify({ .object = entry, .changes = { ldap::mod::replace("cn", { "U" }) } })).has_value());
 		check((co_await d.del({ .entry = entry })).has_value());
 	}
@@ -3140,5 +3141,5 @@ TEST_CASE("integration: one connection, one client and one repository from sever
 	run_threaded(ioc, std::move(tasks));
 	CHECK(failed == 0);
 	CHECK(c.is_open());
-	CHECK(pool.connections() <= 3);
+	CHECK(pool.connection_count() <= 3);
 }

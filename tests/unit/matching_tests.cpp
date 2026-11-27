@@ -540,8 +540,8 @@ TEST_CASE("uniqueMemberMatch", "[matching][dn][rfc]")
 	// And inside a DN: a uniqueMember-valued AVA.
 	CHECK(ldap::distinguished_name_match(parse(R"(cn=x+uniqueMember=cn\=A#'1'B)"),
 			parse(R"(cn=x+uniqueMember=CN\=a#'1'B)"),
-			[](const ldap::attribute &t) -> std::string_view {
-				return t == ldap::attribute{ "uniqueMember" } ? "uniqueMemberMatch" : "";
+			[](const ldap::attribute_description &t) -> std::string_view {
+				return t == ldap::attribute_description{ "uniqueMember" } ? "uniqueMemberMatch" : "";
 			})
 		  == yes);
 }
@@ -651,7 +651,7 @@ TEST_CASE("uuidMatch and uuidOrderingMatch (RFC 4530)", "[matching][rfc]")
 	// entryUUID's rule in a DN.
 	CHECK(ldap::distinguished_name_match(parse("entryUUID=597AE2F6-16A6-1027-98F4-D28B5365DC14"),
 			parse(std::string("entryUUID=") + std::string(u)),
-			[](const ldap::attribute &) -> std::string_view { return "uuidMatch"; })
+			[](const ldap::attribute_description &) -> std::string_view { return "uuidMatch"; })
 		  == yes);
 }
 
@@ -803,7 +803,7 @@ TEST_CASE("distinguishedNameMatch: #hex values are decoded and transcoded", "[ma
 	CHECK(ldap::distinguished_name_match(parse("cn=#16026140"), parse("cn=a@")) == yes);
 	CHECK(ldap::distinguished_name_match(parse("cn=#1A02610A"), parse("cn=a")) == undefined);
 	// INTEGER for integerMatch.
-	const auto rules = [](const ldap::attribute &) -> std::string_view { return "integerMatch"; };
+	const auto rules = [](const ldap::attribute_description &) -> std::string_view { return "integerMatch"; };
 	CHECK(ldap::distinguished_name_match(parse("uidNumber=#020203E8"), parse("uidNumber=1000"), rules) == yes);
 	// Any magnitude: 2^64, -(2^64), 2^128, -1, -128, -129, 255, 0, 10^9.
 	const auto integer = [&](std::string_view hex, std::string_view decimal) {
@@ -825,7 +825,7 @@ TEST_CASE("distinguishedNameMatch: #hex values are decoded and transcoded", "[ma
 	CHECK(integer("#0202FFFF", "-1") == undefined);
 	CHECK(integer("#0200", "0") == undefined);
 	// BOOLEAN for booleanMatch; two content octets are not a BOOLEAN.
-	const auto boolean = [](const ldap::attribute &) -> std::string_view { return "booleanMatch"; };
+	const auto boolean = [](const ldap::attribute_description &) -> std::string_view { return "booleanMatch"; };
 	CHECK(ldap::distinguished_name_match(parse("x=#0101FF"), parse("x=TRUE"), boolean) == yes);
 	CHECK(ldap::distinguished_name_match(parse("x=#010100"), parse("x=FALSE"), boolean) == yes);
 	CHECK(ldap::distinguished_name_match(parse("x=#010100"), parse("x=TRUE"), boolean) == no);
@@ -835,7 +835,7 @@ TEST_CASE("distinguishedNameMatch: #hex values are decoded and transcoded", "[ma
 TEST_CASE("distinguishedNameMatch: a #hex INTEGER is decoded up to 4096 octets", "[matching][dn]")
 {
 	// The decimal conversion is quadratic: 160 KB took 22 s before the cap.
-	const auto rules = [](const ldap::attribute &) -> std::string_view { return "integerMatch"; };
+	const auto rules = [](const ldap::attribute_description &) -> std::string_view { return "integerMatch"; };
 	const auto integer = [](std::string_view length, std::size_t octets) {
 		std::string hex = "x=#02";
 		hex += length;
@@ -858,17 +858,17 @@ TEST_CASE("distinguishedNameMatch: a #hex INTEGER is decoded up to 4096 octets",
 
 TEST_CASE("distinguishedNameMatch with a per-attribute rule lookup", "[matching][dn]")
 {
-	const auto rules = [](const ldap::attribute &t) -> std::string_view {
-		if (t == ldap::attribute{ "uid" }) {
+	const auto rules = [](const ldap::attribute_description &t) -> std::string_view {
+		if (t == ldap::attribute_description{ "uid" }) {
 			return "caseExactMatch";
 		}
-		if (t == ldap::attribute{ "uidNumber" }) {
+		if (t == ldap::attribute_description{ "uidNumber" }) {
 			return "2.5.13.14";// integerMatch
 		}
-		if (t == ldap::attribute{ "createTimestamp" }) {
+		if (t == ldap::attribute_description{ "createTimestamp" }) {
 			return "generalizedTimeMatch";// not implemented
 		}
-		if (t == ldap::attribute{ "seeAlso" }) {
+		if (t == ldap::attribute_description{ "seeAlso" }) {
 			return "caseIgnoreOrderingMatch";// not an equality rule
 		}
 		return {};// caseIgnoreMatch
@@ -885,8 +885,8 @@ TEST_CASE("distinguishedNameMatch: both type names are looked up", "[matching][d
 {
 	// `uid` and `userid` are one type (RFC 4519): a lookup that knows only
 	// `uid` gives two rules for the pair, whichever side it is on.
-	const auto only_uid = [](const ldap::attribute &t) -> std::string_view {
-		return t == ldap::attribute{ "uid" } ? "caseExactMatch" : "";
+	const auto only_uid = [](const ldap::attribute_description &t) -> std::string_view {
+		return t == ldap::attribute_description{ "uid" } ? "caseExactMatch" : "";
 	};
 	const auto m = [](std::string_view a, std::string_view b, const auto &rules) {
 		return ldap::distinguished_name_match(parse(a), parse(b), rules);
@@ -897,15 +897,17 @@ TEST_CASE("distinguishedNameMatch: both type names are looked up", "[matching][d
 	CHECK(m("uid=JD", "uid=jd", only_uid) == no);
 	CHECK(m("userid=JD", "userid=jd", only_uid) == yes);
 	// The same rule for both names: compared by it, in either order.
-	const auto both = [](const ldap::attribute &t) -> std::string_view {
-		return t == ldap::attribute{ "uid" } || t == ldap::attribute{ "userid" } ? "caseExactMatch" : "2.5.13.2";
+	const auto both = [](const ldap::attribute_description &t) -> std::string_view {
+		return t == ldap::attribute_description{ "uid" } || t == ldap::attribute_description{ "userid" }
+				 ? "caseExactMatch"
+				 : "2.5.13.2";
 	};
 	CHECK(m("uid=JD", "userid=jd", both) == no);
 	CHECK(m("userid=JD", "uid=jd", both) == no);
 	CHECK(m("userid=JD", "uid=JD", both) == yes);
 	// A rule NAME and its OID are the same rule (caseIgnoreMatch, 2.5.13.2).
-	const auto name_or_oid = [](const ldap::attribute &t) -> std::string_view {
-		return t == ldap::attribute{ "cn" } ? "caseIgnoreMatch" : "2.5.13.2";
+	const auto name_or_oid = [](const ldap::attribute_description &t) -> std::string_view {
+		return t == ldap::attribute_description{ "cn" } ? "caseIgnoreMatch" : "2.5.13.2";
 	};
 	CHECK(m("cn=JD", "commonName=jd", name_or_oid) == yes);
 	CHECK(m("commonName=JD", "cn=jd", name_or_oid) == yes);
@@ -918,28 +920,29 @@ concept dn_lookup_accepted = requires(const ldap::dn &d, const F &f) { ldap::dis
 
 const std::string exact_rule = "caseExactMatch";
 
-constexpr auto returns_view = [](const ldap::attribute &) -> std::string_view { return "caseExactMatch"; };
-constexpr auto returns_pointer = [](const ldap::attribute &) -> const char * { return nullptr; };
-const auto returns_reference = [](const ldap::attribute &) -> const std::string & { return exact_rule; };
+constexpr auto returns_view = [](const ldap::attribute_description &) -> std::string_view { return "caseExactMatch"; };
+constexpr auto returns_pointer = [](const ldap::attribute_description &) -> const char * { return nullptr; };
+const auto returns_reference = [](const ldap::attribute_description &) -> const std::string & { return exact_rule; };
 // Only checked by the concept, so these are types rather than unused variables.
-using returns_string = decltype([](const ldap::attribute &) -> std::string { return "caseExactMatch"; });
-using returns_pmr_string = decltype([](const ldap::attribute &) -> std::pmr::string { return "caseExactMatch"; });
-using returns_rvalue_reference = decltype([](const ldap::attribute &) -> const std::string && {
+using returns_string = decltype([](const ldap::attribute_description &) -> std::string { return "caseExactMatch"; });
+using returns_pmr_string =
+  decltype([](const ldap::attribute_description &) -> std::pmr::string { return "caseExactMatch"; });
+using returns_rvalue_reference = decltype([](const ldap::attribute_description &) -> const std::string && {
 	return static_cast<const std::string &&>(exact_rule);
 });
-const auto returns_mutable_pointer = [](const ldap::attribute &) -> char * { return nullptr; };
+const auto returns_mutable_pointer = [](const ldap::attribute_description &) -> char * { return nullptr; };
 // The capture keeps the lambda from converting to a function pointer, which a const object could still call.
-using mutable_lambda = decltype([n = 0](const ldap::attribute &) mutable -> std::string_view {
+using mutable_lambda = decltype([n = 0](const ldap::attribute_description &) mutable -> std::string_view {
 	++n;
 	return n == 1 ? "caseExactMatch" : "caseIgnoreMatch";
 });
 
 struct non_const_lookup
 {
-	auto operator()(const ldap::attribute &) -> std::string_view { return {}; }
+	auto operator()(const ldap::attribute_description &) -> std::string_view { return {}; }
 };
 
-auto exact_everywhere(const ldap::attribute &) -> std::string_view { return "caseExactMatch"; }
+auto exact_everywhere(const ldap::attribute_description &) -> std::string_view { return "caseExactMatch"; }
 
 }// namespace
 
@@ -968,11 +971,11 @@ TEST_CASE("distinguishedNameMatch: the rule lookup must not return owned text", 
 
 TEST_CASE("distinguishedNameMatch: DN-valued AVAs use the outer rules", "[matching][dn]")
 {
-	const auto rules = [](const ldap::attribute &t) -> std::string_view {
-		if (t == ldap::attribute{ "member" }) {
+	const auto rules = [](const ldap::attribute_description &t) -> std::string_view {
+		if (t == ldap::attribute_description{ "member" }) {
 			return "distinguishedNameMatch";
 		}
-		return t == ldap::attribute{ "uid" } ? "caseExactMatch" : "";
+		return t == ldap::attribute_description{ "uid" } ? "caseExactMatch" : "";
 	};
 	const auto a = parse(R"(member=uid\=Jane\,dc\=x)");
 	CHECK(ldap::distinguished_name_match(a, parse(R"(member=UID\=Jane\,DC\=X)"), rules) == yes);

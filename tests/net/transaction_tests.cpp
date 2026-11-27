@@ -317,10 +317,10 @@ TEST_CASE("transaction: destroyed while open, it is aborted without waiting", "[
 		REQUIRE(m.run(moved.add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
 		run_on(m.ioc, m.conn.executor(), [&moved] { moved = ldap::transaction{}; });
 	}
-	CHECK(m.conn.outstanding() == 1);// the abort's answer is due
+	CHECK(m.conn.outstanding_count() == 1);// the abort's answer is due
 	auto me = m.run(ldap::who_am_i(m.conn));
 	REQUIRE(me.has_value());
-	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.outstanding_count() == 0);
 	CHECK(m.conn.is_open());
 	m.check_server();
 
@@ -356,7 +356,7 @@ TEST_CASE("transaction: destroyed during a bind that fails, it is still aborted"
 	}
 	drive_until(m.ioc, [&bound] { return bound.done(); });
 	CHECK(bound.get().error().code == errc::invalid_credentials);
-	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+	drive_until(m.ioc, [&m] { return m.conn.outstanding_count() == 0; });
 	CHECK(m.run(ldap::transaction::begin(m.conn)).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 4);
@@ -478,7 +478,7 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 		run_on(m.ioc, m.conn.executor(), [&t] { *t = ldap::transaction{}; });
 	}
 	// ...so the destructor still aborts it on the server.
-	CHECK(m.conn.outstanding() == 1);
+	CHECK(m.conn.outstanding_count() == 1);
 	REQUIRE(m.run(ldap::who_am_i(m.conn)).has_value());
 
 	// Once the server answered, the destructor sends nothing more.
@@ -487,7 +487,7 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 		REQUIRE(t.has_value());
 		REQUIRE(m.run(t->abort()).has_value());
 	}
-	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.outstanding_count() == 0);
 	m.check_server();
 	REQUIRE(m.log.received.size() == 5);
 	CHECK(m.log.received[1].id == 2);
@@ -548,7 +548,7 @@ TEST_CASE("transaction: begin waits for a destroyed transaction's abort", "[net]
 	{
 		drop_then_begin([](mock_ldap &m, ldap::transaction &t) {
 			run_on(m.ioc, m.conn.executor(), [&t] { t = ldap::transaction{}; });
-			CHECK(m.conn.outstanding() == 1);
+			CHECK(m.conn.outstanding_count() == 1);
 		});
 	}
 	SECTION("destroyed off the strand")
@@ -586,7 +586,7 @@ TEST_CASE("transaction: commit refuses while an update is in flight", "[net][tra
 
 	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
-	outcome<ldap::result<ldap::response>> add;
+	outcome<ldap::result<ldap::update_result>> add;
 	spawn(m.ioc, t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } }), add);
 	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 	CHECK_FALSE(add.done());
@@ -666,7 +666,7 @@ TEST_CASE("transaction: destroyed while the abort's write fails inline", "[net][
 	broken = true;
 	run_on(ioc, conn.executor(), [&t] { *t = ldap::transaction{}; });
 	CHECK_FALSE(conn.is_open());
-	CHECK(conn.outstanding() == 0);
+	CHECK(conn.outstanding_count() == 0);
 	CHECK(log.received.size() == 1);
 	const auto me = finish(ioc, ldap::who_am_i(conn));
 	REQUIRE_FALSE(me.has_value());

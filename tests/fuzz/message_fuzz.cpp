@@ -296,7 +296,7 @@ void check_origins(std::span<const std::byte> input, const ldap::message &m)
 void check_filter_text(std::span<const std::uint8_t> data)
 {
 	const std::string_view text(reinterpret_cast<const char *>(data.data()), data.size());
-	auto f = ldap::filter::raw(text);
+	auto f = ldap::filter::parse(text);
 	if (!f) {
 		check(
 		  f.error().code == ldap::client_errc::invalid_filter, "f.error().code == ldap::client_errc::invalid_filter");

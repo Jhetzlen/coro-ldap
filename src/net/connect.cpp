@@ -370,7 +370,7 @@ auto start_tls(transport &t,
   std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<void>>
 {
 	std::string context = "start tls ";
-	context += t.name();
+	context += t.endpoint();
 	if (t.type() != transport::kind::tcp || t.is_tls() || !t.is_open()) {
 		co_return fail(
 		  std::make_error_code(std::errc::invalid_argument), context + ": needs an open plain TCP transport");

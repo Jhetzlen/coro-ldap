@@ -33,7 +33,7 @@ struct account
 }// namespace
 
 template<>
-constexpr auto ldap::schema<account> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<account> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&account::uid>("uid"),
   ldap::field<&account::mail>("mail"),
   ldap::field<&account::groups>("memberOf"),

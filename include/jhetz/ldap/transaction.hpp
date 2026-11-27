@@ -45,10 +45,10 @@ class transaction
 	[[nodiscard]] auto is_open() const noexcept -> bool;
 
 	// The update operations with a transaction_specification control appended.
-	auto add(add_params request) -> boost::capy::task<result<response>>;
-	auto modify(modify_params request) -> boost::capy::task<result<response>>;
-	auto del(del_params request) -> boost::capy::task<result<response>>;
-	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
+	auto add(add_params request) -> boost::capy::task<result<update_result>>;
+	auto modify(modify_params request) -> boost::capy::task<result<update_result>>;
+	auto del(del_params request) -> boost::capy::task<result<update_result>>;
+	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<update_result>>;
 
 	// End Transaction with commit TRUE; operation_in_progress while an update
 	// awaits its answer.

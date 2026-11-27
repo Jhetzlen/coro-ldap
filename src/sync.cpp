@@ -248,7 +248,7 @@ namespace {
 
 	// The update `Op` of `t`, on the I/O thread `io`.
 	template<auto Op, class Params>
-	auto update(const detail::io_thread *io, ldap::transaction *t, Params request) -> result<response>
+	auto update(const detail::io_thread *io, ldap::transaction *t, Params request) -> result<update_result>
 	{
 		if (t == nullptr) {
 			return std::unexpected(moved_from(ldap::detail::update_op<Params>::name));
@@ -317,22 +317,22 @@ auto transaction::is_open() const -> bool
 	return query(io_.get(), txn_.get(), false, [](const ldap::transaction &t) { return t.is_open(); });
 }
 
-auto transaction::add(add_params request) -> result<response>
+auto transaction::add(add_params request) -> result<update_result>
 {
 	return update<&ldap::transaction::add>(io_.get(), txn_.get(), std::move(request));
 }
 
-auto transaction::modify(modify_params request) -> result<response>
+auto transaction::modify(modify_params request) -> result<update_result>
 {
 	return update<&ldap::transaction::modify>(io_.get(), txn_.get(), std::move(request));
 }
 
-auto transaction::del(del_params request) -> result<response>
+auto transaction::del(del_params request) -> result<update_result>
 {
 	return update<&ldap::transaction::del>(io_.get(), txn_.get(), std::move(request));
 }
 
-auto transaction::modify_dn(modify_dn_params request) -> result<response>
+auto transaction::modify_dn(modify_dn_params request) -> result<update_result>
 {
 	return update<&ldap::transaction::modify_dn>(io_.get(), txn_.get(), std::move(request));
 }
@@ -536,22 +536,22 @@ auto client::compare(compare_params request) -> result<compare_result>
 	return detail::on_pool<&ldap::client::compare>(*core_, std::move(request));
 }
 
-auto client::add(add_params request) -> result<response>
+auto client::add(add_params request) -> result<update_result>
 {
 	return detail::on_pool<&ldap::client::add>(*core_, std::move(request));
 }
 
-auto client::modify(modify_params request) -> result<response>
+auto client::modify(modify_params request) -> result<update_result>
 {
 	return detail::on_pool<&ldap::client::modify>(*core_, std::move(request));
 }
 
-auto client::del(del_params request) -> result<response>
+auto client::del(del_params request) -> result<update_result>
 {
 	return detail::on_pool<&ldap::client::del>(*core_, std::move(request));
 }
 
-auto client::modify_dn(modify_dn_params request) -> result<response>
+auto client::modify_dn(modify_dn_params request) -> result<update_result>
 {
 	return detail::on_pool<&ldap::client::modify_dn>(*core_, std::move(request));
 }
@@ -561,12 +561,13 @@ auto client::extended(extended_params request) -> result<extended_result>
 	return detail::on_pool<&ldap::client::extended>(*core_, std::move(request));
 }
 
-auto client::connections() const -> std::size_t
+auto client::connection_count() const -> std::size_t
 {
 	if (core_->io.on_this_thread()) {
-		return core_->pool ? core_->pool->connections() : 0;
+		return core_->pool ? core_->pool->connection_count() : 0;
 	}
-	return core_->io.run([this] { return detail::invoked([this] { return core_->pool->connections(); }); }).value_or(0);
+	return core_->io.run([this] { return detail::invoked([this] { return core_->pool->connection_count(); }); })
+	  .value_or(0);
 }
 
 void client::close() noexcept

@@ -334,7 +334,7 @@ paged_search::~paged_search() { delete_paged(state_); }
 
 auto paged_search::done() const noexcept -> bool { return state_ == nullptr || state_->finished; }
 
-auto paged_search::pages() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pages; }
+auto paged_search::page_count() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pages; }
 
 auto paged_search::references() const noexcept -> const string_list &
 {

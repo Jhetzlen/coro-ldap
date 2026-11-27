@@ -523,7 +523,8 @@ class message_decoder
 		}
 		if (!responses_) {
 			return fail(client_errc::unsupported_operation,
-			  detail::format("message: response operation {} from a client at offset {}", ber::to_string(t), offset));
+			  detail::format(
+				"message: update_result operation {} from a client at offset {}", ber::to_string(t), offset));
 		}
 		switch (t.number) {
 		case op_tag::bind_response:

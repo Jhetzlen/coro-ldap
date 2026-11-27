@@ -95,10 +95,10 @@ class connection
 
 	[[nodiscard]] auto is_open() const noexcept -> bool;
 	// "ldap://127.0.0.1:389"; empty if never connected.
-	[[nodiscard]] auto name() const noexcept -> std::string_view;
+	[[nodiscard]] auto endpoint() const noexcept -> std::string_view;
 	[[nodiscard]] auto executor() const noexcept -> executor_type;
 	// Requests waiting for a response, paged search releases included.
-	[[nodiscard]] auto outstanding() const noexcept -> std::size_t;
+	[[nodiscard]] auto outstanding_count() const noexcept -> std::size_t;
 	// True while TLS protects the open connection.
 	[[nodiscard]] auto is_tls() const noexcept -> bool;
 	// The SASL security layer (RFC 4422 section 3.7) in effect; none otherwise.
@@ -125,10 +125,10 @@ class connection
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
 
-	auto add(add_params request) -> boost::capy::task<result<response>>;
-	auto modify(modify_params request) -> boost::capy::task<result<response>>;
-	auto del(del_params request) -> boost::capy::task<result<response>>;
-	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
+	auto add(add_params request) -> boost::capy::task<result<update_result>>;
+	auto modify(modify_params request) -> boost::capy::task<result<update_result>>;
+	auto del(del_params request) -> boost::capy::task<result<update_result>>;
+	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<update_result>>;
 	auto compare(compare_params request) -> boost::capy::task<result<compare_result>>;
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 

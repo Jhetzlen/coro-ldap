@@ -18,7 +18,7 @@ struct person
 };
 
 template<>
-constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<person> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&person::uid>("uid"),
   ldap::field<&person::cn>("cn"),
   ldap::field<&person::sn>("sn"),

@@ -93,7 +93,7 @@ namespace {
 	}
 
 	// The modify's outcome, its error in the change's context.
-	auto settle(result<response> r, const prepared &p) -> result<void>
+	auto settle(result<update_result> r, const prepared &p) -> result<void>
 	{
 		if (r) {
 			return {};

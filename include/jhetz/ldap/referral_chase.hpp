@@ -31,14 +31,14 @@ using referral_connector = std::function<boost::capy::task<result<connection *>>
 auto chase_search(connection &origin,
   search_params request,
   referral_connector connector,
-  referral_policy policy = {},
+  referral_limits policy = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<search_result>>;
 
 // connection::compare, chasing referral results.
 auto chase_compare(connection &origin,
   compare_params request,
   referral_connector connector,
-  referral_policy policy = {}) -> boost::capy::task<result<compare_result>>;
+  referral_limits policy = {}) -> boost::capy::task<result<compare_result>>;
 
 // A connector keeping the origin's security policy: allowed hosts and
 // ports only, no TLS downgrade, bound only by `setup`; connections reused
@@ -46,7 +46,7 @@ auto chase_compare(connection &origin,
 [[nodiscard]] auto make_same_policy_connector(boost::corosio::io_context &ioc,
   const connection &origin,
   connection_options options,
-  std::vector<std::string> allowed_host_suffixes,
+  std::vector<std::string> allowed_domains,
   session_setup setup = {}) -> referral_connector;
 
 }// namespace jhetz::ldap

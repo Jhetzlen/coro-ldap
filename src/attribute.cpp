@@ -13,7 +13,7 @@
 
 namespace jhetz::ldap {
 
-auto attribute::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<attribute>
+auto attribute_description::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<attribute_description>
 {
 	if (!detail::is_attribute_description(text)) {
 		// The text may be a value a server sent.
@@ -25,7 +25,7 @@ auto attribute::parse(std::string_view text, std::pmr::memory_resource *mr) -> r
 	return unchecked(text, mr);
 }
 
-auto operator<=>(const attribute &a, const attribute &b) noexcept -> std::weak_ordering
+auto operator<=>(const attribute_description &a, const attribute_description &b) noexcept -> std::weak_ordering
 {
 	const std::string_view x = a.name_;
 	const std::string_view y = b.name_;

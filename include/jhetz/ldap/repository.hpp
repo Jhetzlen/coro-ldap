@@ -135,7 +135,7 @@ namespace detail {
 			if (!value) {
 				return std::unexpected(with_context(std::move(value.error()), std::string("attribute ") + name()));
 			}
-			return rdn{ ava{ attribute::unchecked(name()), *value } };
+			return rdn{ ava{ attribute_description::unchecked(name()), *value } };
 		}
 
 		[[nodiscard]] static auto dn_of(const dn &base, const key_type &key) -> result<dn>
@@ -345,8 +345,8 @@ namespace detail {
 				.matched_dn = std::move(found->matched_dn),
 				.diagnostic_message = std::move(found->diagnostic_message),
 				.controls = std::move(found->controls),
-				.referrals = std::move(found->referrals),
-				.unlisted = found->unlisted };
+				.referral_attempts = std::move(found->referral_attempts),
+				.unlisted_attempts = found->unlisted_attempts };
 			out.entries.reserve(found->entries.size());
 			for (const auto &e : found->entries) {
 				auto r = record_of<value_type>(e, base);
@@ -484,7 +484,7 @@ template<class T, class Stream> class record_stream
 	}
 
 	[[nodiscard]] auto done() const noexcept -> bool { return failed_.has_value() || entries_.done(); }
-	// The underlying stream: its references(), controls(), pages().
+	// The underlying stream: its references(), controls(), page_count().
 	[[nodiscard]] auto stream() noexcept -> Stream & { return entries_; }
 	[[nodiscard]] auto stream() const noexcept -> const Stream & { return entries_; }
 
@@ -546,18 +546,18 @@ template<auto Naming, repository_source D> class repository
 	}
 
 	// Adds `value` at dn_of(its naming member).
-	[[nodiscard]] auto add(value_type value, add_controls controls = {}) -> returns<response>
+	[[nodiscard]] auto add(value_type value, add_controls controls = {}) -> returns<update_result>
 	{
 		return call([&](auto &s) { return add_on(s, std::move(value), std::move(controls)); });
 	}
 
 	[[nodiscard]] auto modify(key_type key, std::vector<change<value_type>> changes, modify_controls controls = {})
-	  -> returns<response>
+	  -> returns<update_result>
 	{
 		return call([&](auto &s) { return modify_on(s, dn_of(key), std::move(changes), std::move(controls)); });
 	}
 	[[nodiscard]] auto modify_at(dn entry, std::vector<change<value_type>> changes, modify_controls controls = {})
-	  -> returns<response>
+	  -> returns<update_result>
 	{
 		return call([&](auto &s) { return modify_on(s, std::move(entry), std::move(changes), std::move(controls)); });
 	}
@@ -565,7 +565,7 @@ template<auto Naming, repository_source D> class repository
 	// One modify turning `original` into `changed`; nullopt, nothing sent,
 	// when no member differs.
 	[[nodiscard]] auto update(record<value_type> original, value_type changed, modify_controls controls = {})
-	  -> returns<std::optional<response>>
+	  -> returns<std::optional<update_result>>
 	{
 		return call([&](auto &s) {
 			return update_on(
@@ -573,7 +573,7 @@ template<auto Naming, repository_source D> class repository
 		});
 	}
 	[[nodiscard]] auto update(value_type original, value_type changed, modify_controls controls = {})
-	  -> returns<std::optional<response>>
+	  -> returns<std::optional<update_result>>
 	{
 		return call([&](auto &s) {
 			auto entry = dn_of(original.*Naming);
@@ -584,13 +584,13 @@ template<auto Naming, repository_source D> class repository
 	// update() with an Assertion control (RFC 4528) on `original`; fails with
 	// errc::assertion_failed if the entry changed.
 	[[nodiscard]] auto update_if(record<value_type> original, value_type changed, modify_controls controls = {})
-	  -> returns<std::optional<response>>
+	  -> returns<std::optional<update_result>>
 	{
 		return update_if_guarded(
 		  std::move(original), std::move(changed), detail::every_mapped_value{}, std::move(controls));
 	}
 	[[nodiscard]] auto update_if(value_type original, value_type changed, modify_controls controls = {})
-	  -> returns<std::optional<response>>
+	  -> returns<std::optional<update_result>>
 	{
 		return update_if_guarded(
 		  std::move(original), std::move(changed), detail::every_mapped_value{}, std::move(controls));
@@ -599,36 +599,36 @@ template<auto Naming, repository_source D> class repository
 	[[nodiscard]] auto update_if(record<value_type> original,
 	  value_type changed,
 	  versioned_by_t<Version> version,
-	  modify_controls controls = {}) -> returns<std::optional<response>>
+	  modify_controls controls = {}) -> returns<std::optional<update_result>>
 	{
 		return update_if_guarded(std::move(original), std::move(changed), version, std::move(controls));
 	}
 	template<auto Version>
 	[[nodiscard]] auto
 	  update_if(value_type original, value_type changed, versioned_by_t<Version> version, modify_controls controls = {})
-		-> returns<std::optional<response>>
+		-> returns<std::optional<update_result>>
 	{
 		return update_if_guarded(std::move(original), std::move(changed), version, std::move(controls));
 	}
 
-	[[nodiscard]] auto remove(key_type key, del_controls controls = {}) -> returns<response>
+	[[nodiscard]] auto remove(key_type key, del_controls controls = {}) -> returns<update_result>
 	{
 		return call([&](auto &s) { return remove_on(s, dn_of(key), std::move(controls)); });
 	}
-	[[nodiscard]] auto remove_at(dn entry, del_controls controls = {}) -> returns<response>
+	[[nodiscard]] auto remove_at(dn entry, del_controls controls = {}) -> returns<update_result>
 	{
 		return call([&](auto &s) { return remove_on(s, std::move(entry), std::move(controls)); });
 	}
 
 	// Renames `from` to `to` (deleteoldrdn TRUE).
-	[[nodiscard]] auto rename(key_type from, key_type to, modify_dn_controls controls = {}) -> returns<response>
+	[[nodiscard]] auto rename(key_type from, key_type to, modify_dn_controls controls = {}) -> returns<update_result>
 	{
 		return call(
 		  [&](auto &s) { return send_checked(s, codec::rename_request(base_, from, to, controls), modify_dn_of); });
 	}
 
 	// Moves the entry under `new_base`, keeping its RDN.
-	[[nodiscard]] auto move(key_type key, dn new_base, modify_dn_controls controls = {}) -> returns<response>
+	[[nodiscard]] auto move(key_type key, dn new_base, modify_dn_controls controls = {}) -> returns<update_result>
 	{
 		return call(
 		  [&](auto &s) { return send_checked(s, codec::move_request(base_, key, new_base, controls), modify_dn_of); });
@@ -636,7 +636,7 @@ template<auto Naming, repository_source D> class repository
 	// Moves the entry under `other`'s base; runs on this repository's source.
 	template<repository_source Other>
 	[[nodiscard]] auto move(key_type key, const repository<Naming, Other> &other, modify_dn_controls controls = {})
-	  -> returns<response>
+	  -> returns<update_result>
 	{
 		return move(std::move(key), other.base(), std::move(controls));
 	}
@@ -682,7 +682,7 @@ template<auto Naming, repository_source D> class repository
 
 	template<class Guard>
 	auto update_if_guarded(record<value_type> original, value_type changed, Guard guard, modify_controls controls)
-	  -> returns<std::optional<response>>
+	  -> returns<std::optional<update_result>>
 	{
 		return call([&](auto &s) {
 			return update_if_on(
@@ -691,7 +691,7 @@ template<auto Naming, repository_source D> class repository
 	}
 	template<class Guard>
 	auto update_if_guarded(value_type original, value_type changed, Guard guard, modify_controls controls)
-	  -> returns<std::optional<response>>
+	  -> returns<std::optional<update_result>>
 	{
 		return call([&](auto &s) {
 			auto entry = dn_of(original.*Naming);
@@ -730,7 +730,7 @@ template<auto Naming, repository_source D> class repository
 	}
 
 	template<directory S>
-	auto add_on(S &s, value_type value, add_controls controls) -> boost::capy::task<result<response>>
+	auto add_on(S &s, value_type value, add_controls controls) -> boost::capy::task<result<update_result>>
 	{
 		co_return co_await send_checked(
 		  s, codec::add_request(base_, value, controls), [](S &d, add_params p) { return d.add(std::move(p)); });
@@ -738,7 +738,7 @@ template<auto Naming, repository_source D> class repository
 
 	template<directory S>
 	auto modify_on(S &s, result<dn> entry, std::vector<change<value_type>> changes, modify_controls controls)
-	  -> boost::capy::task<result<response>>
+	  -> boost::capy::task<result<update_result>>
 	{
 		if (!entry) {
 			co_return std::unexpected(detail::with_context(std::move(entry.error()), "modify"));
@@ -750,7 +750,7 @@ template<auto Naming, repository_source D> class repository
 
 	template<directory S>
 	auto update_on(S &s, result<dn> entry, value_type original, value_type changed, modify_controls controls)
-	  -> boost::capy::task<result<std::optional<response>>>
+	  -> boost::capy::task<result<std::optional<update_result>>>
 	{
 		if (!entry) {
 			co_return std::unexpected(detail::with_context(std::move(entry.error()), "modify"));
@@ -765,7 +765,7 @@ template<auto Naming, repository_source D> class repository
 	  value_type original,
 	  value_type changed,
 	  Guard guard,
-	  modify_controls controls) -> boost::capy::task<result<std::optional<response>>>
+	  modify_controls controls) -> boost::capy::task<result<std::optional<update_result>>>
 	{
 		if (!entry) {
 			co_return std::unexpected(detail::with_context(std::move(entry.error()), "modify"));
@@ -776,7 +776,7 @@ template<auto Naming, repository_source D> class repository
 	}
 
 	template<directory S>
-	auto remove_on(S &s, result<dn> entry, del_controls controls) -> boost::capy::task<result<response>>
+	auto remove_on(S &s, result<dn> entry, del_controls controls) -> boost::capy::task<result<update_result>>
 	{
 		if (!entry) {
 			co_return std::unexpected(detail::with_context(std::move(entry.error()), "delete"));
@@ -855,7 +855,7 @@ template<auto Naming, repository_source D> class repository
 
 	// Sends `request` with `send(s, request)` once the schema check passed.
 	template<directory S, class Params, class Send>
-	auto send_checked(S &s, result<Params> request, Send send) -> boost::capy::task<result<response>>
+	auto send_checked(S &s, result<Params> request, Send send) -> boost::capy::task<result<update_result>>
 	{
 		if (!request) {
 			co_return std::unexpected(std::move(request.error()));
@@ -869,13 +869,13 @@ template<auto Naming, repository_source D> class repository
 	// Sends `request` once the schema check passed; nullopt sends nothing.
 	template<directory S>
 	auto send_update(S &s, result<std::optional<modify_params>> request, bool default_guard = false)
-	  -> boost::capy::task<result<std::optional<response>>>
+	  -> boost::capy::task<result<std::optional<update_result>>>
 	{
 		if (!request) {
 			co_return std::unexpected(std::move(request.error()));
 		}
 		if (!*request) {
-			co_return std::optional<response>{};
+			co_return std::optional<update_result>{};
 		}
 		auto c = co_await check_schema(s);
 		if (!c) {
@@ -889,7 +889,7 @@ template<auto Naming, repository_source D> class repository
 		if (!done) {
 			co_return std::unexpected(std::move(done.error()));
 		}
-		co_return std::optional<response>(std::move(*done));
+		co_return std::optional<update_result>(std::move(*done));
 	}
 
 	// The schema check's outcome, or its schema_mismatch or load error.

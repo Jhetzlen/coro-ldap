@@ -71,7 +71,7 @@ enum class reference_kind : std::uint8_t {
 enum class referral_outcome : std::uint8_t {
 	// Sent to the target and answered.
 	followed,
-	skipped_policy,// the connector returned null
+	refused,// the connector returned null
 	skipped_loop,// that server already got the same request in this chase
 	limit_reached,// over max_hops or max_targets, or the timeout was spent
 	unparseable,// cannot be followed: see failure
@@ -101,10 +101,10 @@ template<class Entries> struct basic_search_result
 	std::pmr::string matched_dn{};
 	std::pmr::string diagnostic_message{};
 	std::pmr::vector<control> controls{};
-	// At most referral_policy::max_attempts.
-	std::vector<referral_attempt> referrals{};
-	// URIs a chase considered that are not in `referrals`.
-	std::size_t unlisted = 0;
+	// At most referral_limits::max_listed_attempts.
+	std::vector<referral_attempt> referral_attempts{};
+	// URIs a chase considered that are not in `referral_attempts`.
+	std::size_t unlisted_attempts = 0;
 
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
 	// result_code in result_category(), comparable with errc.
@@ -190,16 +190,16 @@ struct compare_params
 	std::optional<bool> follow_referrals{};
 };
 
-// compareTrue / compareFalse as `value`, with the answering response's
+// compareTrue / compareFalse as `matched`, with the answering response's
 // fields and what a referral chase did.
 struct compare_result
 {
-	bool value = false;
+	bool matched = false;
 	std::pmr::string matched_dn{};
 	std::pmr::string diagnostic_message{};
 	std::pmr::vector<control> controls{};
-	std::vector<referral_attempt> referrals{};
-	std::size_t unlisted = 0;
+	std::vector<referral_attempt> referral_attempts{};
+	std::size_t unlisted_attempts = 0;
 
 	friend auto operator==(const compare_result &, const compare_result &) -> bool = default;
 };
@@ -217,7 +217,7 @@ struct extended_params
 
 // What a successful operation returns besides success (RFC 4511 section
 // 4.1.9 fields and the response's controls).
-struct response
+struct update_result
 {
 	std::int32_t message_id = 0;
 	std::pmr::string matched_dn{};// as sent

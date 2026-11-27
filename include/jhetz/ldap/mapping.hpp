@@ -358,10 +358,10 @@ template<class F0, class... F> consteval auto describe(F0 f0, F... f)
 struct not_described
 {
 };
-template<class T> constexpr auto schema = not_described{};
+template<class T> constexpr auto mapping = not_described{};
 
 template<class T>
-concept described = !std::same_as<std::remove_cvref_t<decltype(schema<T>)>, not_described>;
+concept described = !std::same_as<std::remove_cvref_t<decltype(mapping<T>)>, not_described>;
 
 namespace detail {
 	template<auto A, auto B> consteval auto same_member() -> bool
@@ -376,8 +376,8 @@ namespace detail {
 	template<auto Ptr> consteval auto field_index() -> std::size_t
 	{
 		using C = member_pointer<decltype(Ptr)>::owner;
-		static_assert(described<C>, "ldap: this struct has no ldap::schema<T> descriptor");
-		using fields = std::remove_cvref_t<decltype(schema<C>.fields)>;
+		static_assert(described<C>, "ldap: this struct has no ldap::mapping<T> descriptor");
+		using fields = std::remove_cvref_t<decltype(mapping<C>.fields)>;
 		constexpr std::size_t n = std::tuple_size_v<fields>;
 		std::size_t index = n;
 		[&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -390,14 +390,14 @@ namespace detail {
 	{
 		using C = member_pointer<decltype(Ptr)>::owner;
 		constexpr std::size_t i = field_index<Ptr>();
-		static_assert(i < std::tuple_size_v<std::remove_cvref_t<decltype(schema<C>.fields)>>,
-		  "ldap: this member is not listed in ldap::schema<T>");
-		return std::get<i>(schema<C>.fields);
+		static_assert(i < std::tuple_size_v<std::remove_cvref_t<decltype(mapping<C>.fields)>>,
+		  "ldap: this member is not listed in ldap::mapping<T>");
+		return std::get<i>(mapping<C>.fields);
 	}
 
 	enum class field_set : std::uint8_t { all, writable };
 
-	// Calls fn(f) -> std::optional<error> on each field f of schema<T> (but
+	// Calls fn(f) -> std::optional<error> on each field f of mapping<T> (but
 	// read_only ones for field_set::writable) until one returns an error.
 	template<class T, field_set Set = field_set::all, class Fn> auto for_each_field(Fn fn) -> std::optional<error>
 	{
@@ -415,7 +415,7 @@ namespace detail {
 				}(),
 				...);
 		  },
-		  schema<T>.fields);
+		  mapping<T>.fields);
 		return failed;
 	}
 }// namespace detail
@@ -425,7 +425,7 @@ template<described T>
 [[nodiscard]] auto attribute_names(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> string_list
 {
 	string_list out(mr);
-	std::apply([&](const auto &...f) { (out.emplace_back(f.name), ...); }, schema<T>.fields);
+	std::apply([&](const auto &...f) { (out.emplace_back(f.name), ...); }, mapping<T>.fields);
 	return out;
 }
 
@@ -434,26 +434,26 @@ namespace detail {
 	{
 		return std::apply(
 		  [](const auto &...f) { return std::array<std::string_view, sizeof...(f)>{ std::string_view(f.name)... }; },
-		  schema<T>.fields);
+		  mapping<T>.fields);
 	}
 }// namespace detail
 
 // Without the auxiliary ones.
 template<described T> [[nodiscard]] constexpr auto object_classes_of() -> std::span<const char *const>
 {
-	return schema<T>.classes.names;
+	return mapping<T>.classes.names;
 }
 
 template<described T> [[nodiscard]] constexpr auto auxiliary_classes_of() -> std::span<const char *const>
 {
-	return schema<T>.auxiliary.names;
+	return mapping<T>.auxiliary.names;
 }
 
 namespace detail {
 	// The object classes, then the auxiliary ones: what add writes.
 	template<described T>
 	inline constexpr auto all_object_classes = [] {
-		constexpr auto &d = schema<T>;
+		constexpr auto &d = mapping<T>;
 		std::array<const char *, d.classes.names.size() + d.auxiliary.names.size()> out{};
 		std::size_t i = 0;
 		for (const char *n : d.classes.names) {
@@ -591,7 +591,7 @@ template<described T>
 [[nodiscard]] auto to_attributes(const T &value, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<std::pmr::vector<partial_attribute>>
 {
-	constexpr auto &d = schema<T>;
+	constexpr auto &d = mapping<T>;
 	constexpr bool has_object_class_field =
 	  std::apply([](const auto &...f) { return (detail::iequals(f.name, "objectClass") || ...); }, d.fields);
 	static_assert(d.classes.names.size() > 0 || has_object_class_field,
@@ -672,7 +672,7 @@ namespace detail {
 
 	template<auto Ptr> consteval void check_writable()
 	{
-		static_assert(!field_of<Ptr>().read_only, "ldap: this member is read_only in ldap::schema<T>");
+		static_assert(!field_of<Ptr>().read_only, "ldap: this member is read_only in ldap::mapping<T>");
 	}
 
 	template<auto Ptr> using owner_of = member_pointer<decltype(Ptr)>::owner;
@@ -825,7 +825,7 @@ namespace filters {
 // object class.
 template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 {
-	constexpr auto &names = schema<T>.classes.names;
+	constexpr auto &names = mapping<T>.classes.names;
 	if constexpr (names.size() == 0) {
 		return f;
 	} else {
@@ -860,7 +860,7 @@ namespace detail {
 // Assertion control (RFC 4528); empty when `original` has no value.
 template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> result<filter>
 {
-	static_assert(std::apply([](const auto &...f) { return (!f.read_only || ...); }, schema<T>.fields),
+	static_assert(std::apply([](const auto &...f) { return (!f.read_only || ...); }, mapping<T>.fields),
 	  "ldap::unchanged_filter: every member is read_only");
 	filter out;
 	auto failed = detail::for_each_field<T, detail::field_set::writable>(

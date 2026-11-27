@@ -13,7 +13,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 | Search, entry by entry | `connection::search_stream(params)` | `next()` / `next_item()`; memory bounded by the caller's pace; abandons the search when destroyed early |
 | Search a large result in pages | `ldap::search_paged_stream(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `ldap::search_paged` and `sync::search_paged` collect every page |
 | Search into structs | `repository<T>::search` / `search_stream` / `search_paged` / `search_paged_stream` (repository.hpp) | the same shapes, entries decoded to `record<T>` |
-| Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` / `follow_references` override the pool's switches for one call; `client::search_stream`, `search_paged` and the `connection` / `sync::connection` calls ignore it (they never chase) |
+| Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referral_attempts` / `unlisted_attempts`, `is_complete()`; a request's `follow_referrals` / `follow_references` override the pool's switches for one call; `client::search_stream`, `search_paged` and the `connection` / `sync::connection` calls ignore it (they never chase) |
 | Follow referrals from a bare connection | `ldap::chase_search(conn, params, connector)`, `chase_compare` (referral_chase.hpp) | the caller's `referral_connector` decides which servers and how to bind (`make_same_policy_connector`) |
 | Watch changes | `search_stream` with `ldap::sync_request` (content_sync.hpp) | RFC 4533 refreshOnly / refreshAndPersist |
 | Change a password, RFC 3062 | `ldap::password_modify(d, params)` | the Password Modify request as the RFC has it; returns the generated password, if any |
@@ -138,7 +138,7 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   equality, substrings, >=, <=, present, approx, extensible match) holding
   unescaped values. Built by the builders in `ldap::filters`
   (`attr("uid") == v && !attr("x").present()`), which make nodes directly
-  (never text), or parsed once from RFC 4515 text by `filter::raw(text)`,
+  (never text), or parsed once from RFC 4515 text by `filter::parse(text)`,
   which returns `result<filter>` (malformed text fails there, with
   `invalid_filter`). `encode_filter` writes BER straight from the tree;
   `to_string()` prints canonical RFC 4515 text for logs; `root()` gives a
@@ -157,8 +157,8 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   one value, exactly as `to_string()` writes it (`*` `(` `)` `\` NUL and
   non-UTF-8 octets as `\xx`; UTF-8 is kept), and
   `unescape_filter_value(text)` returns `result<std::pmr::string>`, failing
-  with `invalid_filter` on what `filter::raw` would reject in a value.
-  `filter::raw` reads text not starting with `(` as if wrapped in
+  with `invalid_filter` on what `filter::parse` would reject in a value.
+  `filter::parse` reads text not starting with `(` as if wrapped in
   parentheses (`uid=jdoe`, as ldapsearch does); otherwise no whitespace
   between elements, and `(`, `)`, `*` outside substrings, `\` and NUL must
   be escaped. A default-constructed filter is empty: combining it gives an
@@ -169,7 +169,7 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   fails with that error instead of `invalid_filter`. A filter
   combined from others uses the left operand's memory resource. An
   attribute given to `filters::attr` that is not a valid description (only
-  possible with `attribute::unchecked`) makes every filter built from it a
+  possible with `attribute_description::unchecked`) makes every filter built from it a
   `failed()` one (`invalid_attribute`), and so does a bad extensible-match
   rule (`invalid_filter`).
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
@@ -225,17 +225,17 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   with caseIgnoreMatch for every attribute; `distinguished_name_match(a, b,
   schema)` uses each type's EQUALITY from a `server_schema` (inherited
   through SUP, caseIgnoreMatch when none); `distinguished_name_match(a, b,
-  lookup)` takes a callable on `const ldap::attribute &` returning a rule
+  lookup)` takes a callable on `const ldap::attribute_description &` returning a rule
   NAME or OID, or an empty string for caseIgnoreMatch, as a
   `std::string_view`, a `const char *` or a reference to a string (a
   `std::string` by value does not compile). Every overload treats a type's
   names and OID as one (the schema's, then RFC 4512's and RFC 4519's:
   `cn`, `commonName`, `2.5.4.3`); RDNs that differ only in a type name
   nothing resolves compare Undefined.
-- `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
+- `jhetz/ldap/attribute.hpp`: `ldap::attribute_description`, an attribute description with
   case-insensitive equality, ordering and `std::hash`; also
-  `attribute::parse(text)` (runtime text, `invalid_attribute`) and
-  `attribute::unchecked(text)` for names a server sent as they are (AD's
+  `attribute_description::parse(text)` (runtime text, `invalid_attribute`) and
+  `attribute_description::unchecked(text)` for names a server sent as they are (AD's
   `member;range=0-1499`). The hash is seeded per process: its values must
   not be stored or sent.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
@@ -275,7 +275,7 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   equality, the filter as a tree), and `to_string()` is canonical.
   `parse_list(uris)` keeps only the valid LDAP URLs (servers may send any
   scheme).
-- `jhetz/ldap/referral.hpp`: `referral_target(url, request)`, the request
+- `jhetz/ldap/referral.hpp`: `referred_request(url, request)`, the request
   that progresses an operation at a referral's target (RFC 4511 section
   4.1.10), for a search, a compare and each update; build only, nothing is
   sent. An absent (or empty) DN, an absent scope or filter keep the
@@ -616,8 +616,8 @@ itself needs only ICU.
   another fails with `security_layer_in_effect`; `peer_certificate()` is
   a view valid until the connection is destroyed or assigned to, or
   `start_tls()` runs again; `bind_count()` counts the bind exchanges
-  begun, whatever their outcome; `outstanding()` counts the operations and
-  the paged search releases still due, not abandoned requests; `name()`
+  begun, whatever their outcome; `outstanding_count()` counts the operations and
+  the paged search releases still due, not abandoned requests; `endpoint()`
   is where it is connected, for logs.
   `sasl_bind(mechanism, name)` (the mechanism must outlive the task) sends
   at most 32 BindRequests, then fails with `unexpected_response`. A
@@ -648,7 +648,7 @@ itself needs only ICU.
   `connection::executor_type` is a `capy::strand` of the io_context's
   executor; every operation of the connection, its streams, paged searches
   and transactions runs on it and resumes the awaiting task on that
-  task's own executor. `is_open()`, `outstanding()`, `is_tls()`,
+  task's own executor. `is_open()`, `outstanding_count()`, `is_tls()`,
   `security_layer()` and `bind_count()` are snapshots, safe on any thread;
   a second concurrent `next()` on a stream fails with
   `operation_in_progress`. `close()` and the destructors of
@@ -694,9 +694,9 @@ itself needs only ICU.
   `del`, `modify_dn`
   (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,
   .new_superior}`), `compare`
-  (`result<compare_result>`: `value` true / false for compareTrue /
+  (`result<compare_result>`: `matched` true / false for compareTrue /
   compareFalse, the response's `matched_dn`, `diagnostic_message` and
-  `controls`, and an empty chase report (`referrals`, `unlisted`) where
+  `controls`, and an empty chase report (`referral_attempts`, `unlisted_attempts`) where
   nothing chases) and `extended`, each taking a params aggregate
   with `.controls` (that operation's control list, see controls.hpp
   below) and `.timeout` (`extended` refuses the StartTLS name with
@@ -759,7 +759,7 @@ itself needs only ICU.
   being the server's opaque state) (destroyed early, it
   abandons the current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
-  release's answer is read and dropped, and counted by `outstanding()`
+  release's answer is read and dropped, and counted by `outstanding_count()`
   until it arrives or the page timeout passes). Several paged searches
   may run at once on a connection (RFC 2696 section 3), but OpenLDAP keeps
   one per connection: it refuses the next page of any but the one whose
@@ -794,7 +794,7 @@ itself needs only ICU.
   limit code a followed continuation reference's search ended with;
   `references` holds the URIs of the continuation references not
   followed): the entries of every server reached, one `referral_attempt`
-  per URI tried (`followed`, `skipped_policy`, `skipped_loop`,
+  per URI tried (`followed`, `refused`, `skipped_loop`,
   `limit_reached`, `unparseable`, `failed` with its error), and
   `is_complete() == false` (`is_success() && references.empty()`) when a
   continuation reference could not be followed or a search ended with a
@@ -804,21 +804,21 @@ itself needs only ICU.
   referral; its context counts the attempts' outcomes); with the
   request's `follow_referrals` false, a referral result is not chased (the
   call fails with `errc::referral`). `chase_compare(conn, params, connector, policy)` does the
-  same for a compare (`compare_result{value, matched_dn, diagnostic_message,
+  same for a compare (`compare_result{matched, matched_dn, diagnostic_message,
   controls, referrals, unlisted}`, the LDAPResult tail and controls of the
   response that answered). The URIs of one
-  reference are alternatives, tried in order; `referral_policy` bounds the
+  reference are alternatives, tried in order; `referral_limits` bounds the
   depth (`max_hops`, 10 by default as RFC 4511 asks), the connector calls
   (`max_targets`, 64; once reached the chase stops, and the references still
-  waiting are only counted in `unlisted`) and the attempt list
-  (`max_attempts`, 256; the rest counted in `unlisted`); the request's
+  waiting are only counted in `unlisted_attempts`) and the attempt list
+  (`max_listed_attempts`, 256; the rest counted in `unlisted_attempts`); the request's
   `timeout` bounds the whole chase, the connector's work included
   (cancelled when the budget is spent). Loops
   (the same server, DN, scope and filter, the origin's own request
   included) are skipped. Writes are never chased.
-  `make_same_policy_connector(ioc, origin, options, allowed_host_suffixes, setup)`
+  `make_same_policy_connector(ioc, origin, options, allowed_domains, setup)`
   builds a connector keeping the origin's policy: ldapi:// and hosts
-  outside `allowed_host_suffixes` (a name and its subdomains, IDNs in ASCII form;
+  outside `allowed_domains` (a name and its subdomains, IDNs in ASCII form;
   IP addresses exactly; empty by default, so nothing is followed), hosts
   with bytes no host name has, and ports other than the scheme's default
   and the origin's (unless an entry names it: `host:port`, `[::1]:port`;
@@ -1231,7 +1231,7 @@ itself needs only ICU.
   Password Modify takes it only as a raw control, and only a typed one is
   checked against proxied authorization.
 - `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
-  (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
+  (`ldap::mapping<T> = ldap::describe(ldap::object_class(...),
   ldap::auxiliary_class(...), ldap::field<&T::m>("attr",
   ldap::read_only)...)`, both class lists optional, auxiliary only after
   object_class) maps members to attributes; auxiliary classes are added
@@ -1254,7 +1254,7 @@ itself needs only ICU.
   (repository.hpp, below). connection.hpp (and so sync.hpp and client.hpp)
   does not include directory.hpp, mapping.hpp and schema.hpp: include
   jhetz/ldap/directory.hpp for `load_schema`, mapping.hpp and schema.hpp
-  for the typed mapping (`decode<T>`, `ldap::schema<T>`, `describe`,
+  for the typed mapping (`decode<T>`, `ldap::mapping<T>`, `describe`,
   `validate<T>`), repository.hpp for `ldap::repository`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
   compile; `tests/unit/compile/` checks each. Encoding can fail:
@@ -1298,7 +1298,7 @@ itself needs only ICU.
   `server_schema::skipped_for_syntax(name)` (an attribute type defined
   but skipped because its SYNTAX is not a numeric OID),
   `attribute_type` with `usage` (`attribute_usage`),
-  `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
+  `object_class_description` with `sup`, `kind` (`object_class_kind`), `must`
   and `may`, `dit_content_rule` (`obsolete`, `aux`, `must`, `may`, `precluded`: RFC
   4512 4.1.6; `parse_dit_content_rule`,
   `server_schema::find_dit_content_rule(class_oid)`); the free
@@ -1329,7 +1329,7 @@ itself needs only ICU.
   ldap::client>`); one repository may be used from several threads (its
   schema-check outcome is behind a lock). A repository keeps no entries:
   each call is one request. The naming member must be in
-  `schema<T>`, required, single-valued and writable (static_assert).
+  `mapping<T>`, required, single-valued and writable (static_assert).
   `dn_of(key)`
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
   std::optional<T>>>` (a base-object search for T's attributes and object
@@ -1447,13 +1447,13 @@ itself needs only ICU.
   and ends them: they must not be used after that); a default-constructed (noexcept) or moved-from one
   has no thread and its operations fail with `not_connected`. Each
   method runs the `ldap::connection` member of the same name on the I/O
-  thread and waits, with the same types, except: `name()` returns a
+  thread and waits, with the same types, except: `endpoint()` returns a
   `std::string`, `peer_certificate()` a `std::vector<std::byte>` and
   `channel_bindings()` a `sync::channel_bindings` (the two bindings as
   `std::vector<std::byte>`, `default_type`, `get(type)`), all copied, and
   `executor()` is the I/O thread's, not the connection's strand (a
-  default-constructed one returns empty or zero values: `name()`,
-  `outstanding()`, `bind_count()`); `simple_bind`, `sasl_bind` and
+  default-constructed one returns empty or zero values: `endpoint()`,
+  `outstanding_count()`, `bind_count()`); `simple_bind`, `sasl_bind` and
   `start_tls` return `result<sync::connection>`, a copy of the handle (a
   sync lease's return `result<std::reference_wrapper<lease>>`, the lease
   itself: a lease is move-only and a copy of its connection would not be
@@ -1512,7 +1512,7 @@ itself needs only ICU.
   connection on its own; `close()`, the destructor and a lease's release
   off that strand post their work, as `connection::close()` does).
   `client(ioc, client_options{.servers, .connection, .setup,
-  .max_connections = 1, .idle_check, .probe_timeout, .max_lifetime,
+  .max_connections = 1, .probe_idle_after, .probe_timeout, .max_lifetime,
   .acquire_timeout, .backoff, .failback_after, .observer, .referrals})`. The default
   `max_connections = 1` is one multiplexed connection that every shared
   lease uses at once, not a pool of one connection per caller; raise it
@@ -1558,7 +1558,7 @@ itself needs only ICU.
   failure backs that server off for at least `auth_failure_min`, during
   which acquires fail at once with the stored error instead of binding
   again. An idle connection is probed (root DSE, `1.1`) after
-  `idle_check` (`nullopt`: never), within `probe_timeout`
+  `probe_idle_after` (`nullopt`: never), within `probe_timeout`
   (`ldap::no_timeout`: only `acquire_timeout` bounds it); with
   `acquire_timeout = ldap::no_timeout` an `acquire()` retries until it
   succeeds, is cancelled or the client is closed; a connection older than
@@ -1568,9 +1568,9 @@ itself needs only ICU.
   `client_observer` hooks (`on_connect`, `on_disconnect` with a
   `disconnect_reason`, `on_retry`, `on_probe`, `on_acquire_wait`) do
   nothing by default, and none runs after `close()`. `close()`,
-  `connections()`. Read forwarders `search(params, mr)`,
+  `connection_count()`. Read forwarders `search(params, mr)`,
   `search_stream(params, mr)` and `compare(params)` (`->
-  task<result<compare_result>>`: `value`, and the chase's report) run the operation on a
+  task<result<compare_result>>`: `matched`, and the chase's report) run the operation on a
   shared lease and retry it
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
@@ -1591,19 +1591,19 @@ itself needs only ICU.
   nothing by default. `follow_referrals` chases referral results of
   `search()` and `compare()`, `follow_references` the continuation
   references of `search()`, as `chase_search` / `chase_compare` do, from
-  the pooled connection, within `limits` (a `referral_policy`). A
+  the pooled connection, within `limits` (a `referral_limits`). A
   request's `follow_referrals` (`search_params`, `compare_params`:
   `std::optional<bool>`) overrides `follow_referrals` for that call
   (`search()`, `compare()`, and the same on `sync::client`), and
   `search_params::follow_references` overrides `follow_references` for
   that search (false: the references stay in `references`, counted in
-  `unlisted`); each governs only its own mechanism (referral results,
+  `unlisted_attempts`); each governs only its own mechanism (referral results,
   continuation references), and `chase_search` / `chase_compare` take
   them too (false turns chasing off). The calls that never chase ignore
   both: `client::search_stream`, `ldap::search_paged_stream` and `search_paged` on a client, every
   `connection` and `sync::connection` call, and a call on a lease
   (`(*lease)->search(...)`).
-  `authorize`, a `std::function<referral_binding(const referral_hop &)>`
+  `authorize`, a `std::function<referral_access(const referral_hop &)>`
   (`referral_hop{target, depth, origin}`), returns `refuse`, `anonymous`
   or `same_setup` (bind with the client's `session_setup`) per URI;
   empty: nothing is contacted. `same_setup_for_domains(domains)` builds
@@ -1617,8 +1617,8 @@ itself needs only ICU.
   the continuation references not followed in `references`, when the
   origin's search succeeded the first limit code of a followed
   reference's search as `result_code`, and what the chase did in
-  `referrals` and `unlisted`; with `follow_references` off, the
-  references received are counted in `unlisted`), `compare()` its
+  `referral_attempts` and `unlisted_attempts`; with `follow_references` off, the
+  references received are counted in `unlisted_attempts`), `compare()` its
   `compare_result`; `client_observer::on_referral(server,
   attempt)` hears of each URI. Writes (forwarders and leases),
   `search_stream()` and `extended()` never chase.
@@ -1662,7 +1662,7 @@ itself needs only ICU.
   `sync::search_stream` holding one shared lease until destroyed, retried
   as `client::search_stream` is. `close()` (from any thread,
   the I/O thread included) fails waiting and later `acquire()` calls with
-  `not_connected`; `connections()`, `executor()`. A call from the I/O
+  `not_connected`; `connection_count()`, `executor()`. A call from the I/O
   thread fails with `would_deadlock` (context `"sync::client"`). The
   destructor closes the pool (idle connections unbound) and joins the I/O
   thread; a lease may outlive the client (its connection is closed, its
@@ -1980,7 +1980,7 @@ Errors are values (`result<T>`); the exceptions left are these:
   propagates out of the call that ran it.
 - `result<T>::value()` on an error: `std::bad_expected_access`.
 
-The literal constructors (`dn`, `rdn`, `attribute`, `url`, the mapping
+The literal constructors (`dn`, `rdn`, `attribute_description`, `url`, the mapping
 descriptors) are consteval: an invalid literal does not compile.
 
 ## Memory
@@ -1990,7 +1990,7 @@ and are allocator-aware: the decoded part of the message model (`message`,
 every response operation, `ldap_result`, `control`, `partial_attribute`,
 the typed response controls such as `paged_results`, `sort_result`,
 `vlv_response` and `end_transaction_response`), `filter`,
-`dn` / `rdn` / `ava`, `attribute`, `entry` / `attribute_values`, `url` /
+`dn` / `rdn` / `ava`, `attribute_description`, `entry` / `attribute`, `url` /
 `url_extension` and `ber::writer` have `allocator_type`, `get_allocator()`,
 an allocator constructor, allocator-extended copy and move constructors, and
 assignment that keeps the target's resource (also for their `std::optional`
@@ -1998,7 +1998,7 @@ and `std::variant` members). The request operations (`bind_request`,
 `search_request`, `add_request`, ..., `attribute_value_assertion`,
 `modify_change`, `end_transaction_request`) are plain values on the default
 resource: they are built once per operation, never bulk-decoded. Parsing and decoding take the resource:
-`decode_options::memory`, `filter::raw(text, mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
+`decode_options::memory`, `filter::parse(text, mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute_description::parse(text, mr)`,
 `url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
 `read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.
 The defaults are the default resource, i.e. the heap, so nothing changes

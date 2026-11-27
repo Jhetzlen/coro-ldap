@@ -106,7 +106,7 @@ namespace {
 			if (j != 0) {
 				out += '+';
 			}
-			out += r.avas[j].type.name();
+			out += r.avas[j].type.text();
 			out += '=';
 			append_value(out, r.avas[j]);
 		}
@@ -116,7 +116,7 @@ namespace {
 	void append_ava(rdn &r, const detail::dn_token &tok, std::pmr::memory_resource *mr)
 	{
 		auto &a = r.avas.emplace_back();// uses-allocator: on r's resource
-		a.type = attribute::unchecked(tok.type, mr);
+		a.type = attribute_description::unchecked(tok.type, mr);
 		a.value = unescape(tok, mr);
 		a.hex_form = tok.hex;
 	}
@@ -256,7 +256,7 @@ auto dn::child(rdn &&r) const -> result<dn>
 		return fail(client_errc::invalid_dn, "dn::child: empty RDN");
 	}
 	for (const auto &a : r.avas) {
-		if (!detail::is_oid(a.type.name())) {
+		if (!detail::is_oid(a.type.text())) {
 			return fail(client_errc::invalid_dn, "dn::child: invalid attribute type");
 		}
 		if (a.hex_form && a.value.empty()) {
