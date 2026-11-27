@@ -13,8 +13,7 @@ that is not coroutine-based. It covers TLS, StartTLS and `ldapi://`, SASL
 EXTERNAL, SCRAM-SHA-256 and optionally GSSAPI, a connection pool, typed
 entry mapping, and full UTF-8 with RFC 4518 matching.
 
-Windows (MSVC) builds and passes the unit tests in CI; macOS is not supported.
-Windows is ported but unverified; macOS is not supported.
+Linux and Windows (MSVC) are tested; macOS is not supported.
 
 ## Features
 
