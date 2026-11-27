@@ -48,9 +48,15 @@ struct tls_options
 	std::filesystem::path ca_dir{};
 	std::pmr::string ca_pem{};// CA certificates as PEM text
 
-	// Client certificate and key (PEM), both or neither.
+	// Client certificate and key (PEM), both or neither: as files, or as
+	// text (e.g. read from a PKCS#12 file or a platform store), not both.
 	std::filesystem::path cert_file{};
 	std::filesystem::path key_file{};
+	// The leaf certificate first; its chain may follow.
+	std::pmr::string cert_pem{};
+	// Unencrypted, PKCS#8 or traditional PEM; copied with the options and
+	// not wiped by the library (the caller owns its lifetime).
+	std::pmr::string key_pem{};
 
 	// SNI and the name matched; empty: the URL's host.
 	std::pmr::string server_name{};
