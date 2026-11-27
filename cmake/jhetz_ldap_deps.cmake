@@ -16,8 +16,11 @@ set(jhetz_ldap_vcpkg_dir ${CMAKE_BINARY_DIR}/_deps/jhetz_ldap_vcpkg)
 # only on Linux; on Windows both configurations with the DLL CRT, which is
 # what /MD and /MDd link. A static C++ library must also have the build's
 # _ITERATOR_DEBUG_LEVEL (the linker refuses a mix, LNK2038): when the flags
-# set one, an overlay triplet builds both libraries with it.
+# set one, an overlay triplet builds both libraries with it. `out` is the
+# triplet, `out`_FILE an overlay triplet's text (written only when vcpkg
+# runs: a build that finds everything installed writes nothing).
 function(jhetz_ldap_vcpkg_triplet out)
+    set(${out}_FILE "" PARENT_SCOPE)
     if(MSVC)
         set(arch ${CMAKE_CXX_COMPILER_ARCHITECTURE_ID})
     else()
@@ -51,21 +54,23 @@ function(jhetz_ldap_vcpkg_triplet out)
             set(name jhetz-ldap-${arch}-windows-static-md-idl${idl}${scope})
             string(TOLOWER ${name} name)
             set(${out} ${name} PARENT_SCOPE)
-            file(WRITE ${jhetz_ldap_vcpkg_dir}/triplets/${name}.cmake
+            string(CONCAT text
                 "set(VCPKG_TARGET_ARCHITECTURE ${arch})\n"
                 "set(VCPKG_CRT_LINKAGE dynamic)\n"
                 "set(VCPKG_LIBRARY_LINKAGE static)\n"
                 "set(VCPKG_C_FLAGS${scope} \"/D_ITERATOR_DEBUG_LEVEL=${idl}\")\n"
                 "set(VCPKG_CXX_FLAGS${scope} \"/D_ITERATOR_DEBUG_LEVEL=${idl}\")\n")
+            set(${out}_FILE "${text}" PARENT_SCOPE)
         endif()
     else()
         set(${out} jhetz-ldap-${arch}-linux PARENT_SCOPE)
-        file(WRITE ${jhetz_ldap_vcpkg_dir}/triplets/jhetz-ldap-${arch}-linux.cmake
+        string(CONCAT text
             "set(VCPKG_TARGET_ARCHITECTURE ${arch})\n"
             "set(VCPKG_CRT_LINKAGE dynamic)\n"
             "set(VCPKG_LIBRARY_LINKAGE static)\n"
             "set(VCPKG_CMAKE_SYSTEM_NAME Linux)\n"
             "set(VCPKG_BUILD_TYPE release)\n")
+        set(${out}_FILE "${text}" PARENT_SCOPE)
     endif()
 endfunction()
 
@@ -83,6 +88,10 @@ endfunction()
 # Clones and bootstraps the pinned vcpkg (unless JHETZ_LDAP_VCPKG_ROOT) and
 # installs `ports` for `triplet` under `installed` (classic mode).
 function(jhetz_ldap_vcpkg_install triplet installed ports)
+    file(MAKE_DIRECTORY ${jhetz_ldap_vcpkg_dir}/triplets)
+    if(NOT "${jhetz_ldap_triplet_FILE}" STREQUAL "")
+        file(WRITE ${jhetz_ldap_vcpkg_dir}/triplets/${triplet}.cmake "${jhetz_ldap_triplet_FILE}")
+    endif()
     set(root "${JHETZ_LDAP_VCPKG_ROOT}")
     if("${root}" STREQUAL "")
         set(root ${jhetz_ldap_vcpkg_dir}/vcpkg)
@@ -247,6 +256,16 @@ if(JHETZ_LDAP_BUILD_NET AND NOT OPENSSL_FOUND)
         "Conan toolchain, leave JHETZ_LDAP_FETCH_DEPS on (Linux and MSVC) to build it with vcpkg, "
         "or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
 endif()
+
+# What was found in the prefix is vcpkg's, stamp or not.
+foreach(port var IN ZIP_LISTS jhetz_ldap_dep_ports jhetz_ldap_dep_vars)
+    if(NOT port IN_LIST jhetz_ldap_vcpkg_ports AND DEFINED CACHE{${var}})
+        string(FIND "$CACHE{${var}}" "${jhetz_ldap_vcpkg_prefix}/" at)
+        if(at EQUAL 0)
+            list(APPEND jhetz_ldap_vcpkg_ports ${port})
+        endif()
+    endif()
+endforeach()
 
 # A vcpkg-built ICU is static: its headers need U_STATIC_IMPLEMENTATION on
 # Windows, and its libraries libdl and the threads library on Linux.
