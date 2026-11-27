@@ -1111,8 +1111,10 @@ jhetz::ldap, with HMAC-MD5, MD5 and `RAND_bytes` from OpenSSL. MD4 is
 a self-contained RFC 1320 implementation, since OpenSSL 3 has it only in
 its legacy provider, often not loaded. The NEGOTIATE_MESSAGE asks for
 Unicode, the target name, NTLM with extended session security,
-TargetInfo, a Version and 128-bit keys (flags 0x22880205); without a
-security layer (the default) no SIGN, SEAL, ALWAYS_SIGN nor KEY_EXCH, and
+TargetInfo, a Version, 128-bit keys and ALWAYS_SIGN (flags 0x22888205);
+without a security layer (the default) no SIGN, SEAL nor KEY_EXCH (an
+Active Directory DC refuses an AUTHENTICATE_MESSAGE with none of SIGN,
+SEAL and ALWAYS_SIGN: AcceptSecurityContext error, data 57), and
 the exported session key is the SessionBaseKey (KeyExchangeKey for
 NTLMv2, no key exchange, MS-NLMP section 3.4.5.1), which keys the MIC
 without RC4 (the wire bytes are those of the bind before the layer
