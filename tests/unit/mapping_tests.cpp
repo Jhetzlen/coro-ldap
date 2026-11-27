@@ -70,7 +70,7 @@ constexpr auto ldap::enum_names<status> = std::to_array<std::pair<status, std::s
   { { status::active, "active" }, { status::locked, "locked" }, { status::retired, "retired" } });
 
 template<>
-constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
+constexpr auto ldap::mapping<person> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
   ldap::field<&person::uid>("uid"),
   ldap::field<&person::cn>("cn"),
   ldap::field<&person::mail>("mail"),
@@ -83,19 +83,19 @@ constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrg
   ldap::field<&person::state>("x-status"));
 
 template<>
-constexpr auto ldap::schema<account> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<account> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::auxiliary_class("posixAccount", "shadowAccount"),
   ldap::field<&account::uid>("uid"),
   ldap::field<&account::uid_number>("uidNumber"));
 
 template<>
-constexpr auto ldap::schema<device> =
+constexpr auto ldap::mapping<device> =
   ldap::describe(ldap::field<&device::object_class>("objectClass"), ldap::field<&device::cn>("cn"));
 
-template<> constexpr auto ldap::schema<album> = ldap::describe(ldap::field<&album::photos>("jpegPhoto"));
+template<> constexpr auto ldap::mapping<album> = ldap::describe(ldap::field<&album::photos>("jpegPhoto"));
 
 template<>
-constexpr auto ldap::schema<certified> = ldap::describe(ldap::field<&certified::cn>("cn"),
+constexpr auto ldap::mapping<certified> = ldap::describe(ldap::field<&certified::cn>("cn"),
   ldap::field<&certified::certificates>("userCertificate;lang-en;binary"));
 
 namespace {
@@ -963,7 +963,7 @@ template<> struct ldap::value_traits<even>
 };
 
 template<>
-constexpr auto ldap::schema<reading> = ldap::describe(ldap::object_class("device"),
+constexpr auto ldap::mapping<reading> = ldap::describe(ldap::object_class("device"),
   ldap::field<&reading::temperature>("x-temperature"),
   ldap::field<&reading::count>("x-count"));
 

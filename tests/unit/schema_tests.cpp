@@ -276,7 +276,7 @@ struct on_cycle
 }// namespace
 
 template<>
-constexpr auto ldap::schema<on_cycle> = ldap::describe(ldap::object_class("top"), ldap::field<&on_cycle::a>("a"));
+constexpr auto ldap::mapping<on_cycle> = ldap::describe(ldap::object_class("top"), ldap::field<&on_cycle::a>("a"));
 
 TEST_CASE("schema: a SUP cycle is reported as a chain too long", "[schema][validate]")
 {
@@ -389,7 +389,7 @@ struct bad_person
 }// namespace
 
 template<>
-constexpr auto ldap::schema<good_person> = ldap::describe(ldap::object_class("inetOrgPerson", "person"),
+constexpr auto ldap::mapping<good_person> = ldap::describe(ldap::object_class("inetOrgPerson", "person"),
   ldap::field<&good_person::uid>("uid"),
   ldap::field<&good_person::cn>("commonName"),
   ldap::field<&good_person::uid_number>("uidNumber"),
@@ -397,7 +397,7 @@ constexpr auto ldap::schema<good_person> = ldap::describe(ldap::object_class("in
   ldap::field<&good_person::created>("createTimestamp", ldap::read_only));
 
 template<>
-constexpr auto ldap::schema<bad_person> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
+constexpr auto ldap::mapping<bad_person> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
   ldap::field<&bad_person::uid>("uid"),
   ldap::field<&bad_person::cn>("cn"),
   ldap::field<&bad_person::mail>("mail"),
@@ -415,7 +415,7 @@ struct long_syntax
 }// namespace
 
 template<>
-constexpr auto ldap::schema<long_syntax> =
+constexpr auto ldap::mapping<long_syntax> =
   ldap::describe(ldap::object_class("top"), ldap::field<&long_syntax::n>("longSyntax"));
 
 // The report cuts the SYNTAX at 64 bytes.
@@ -451,7 +451,7 @@ struct broken_sup
 }// namespace
 
 template<>
-constexpr auto ldap::schema<broken_sup> = ldap::describe(ldap::object_class("top"),
+constexpr auto ldap::mapping<broken_sup> = ldap::describe(ldap::object_class("top"),
   ldap::field<&broken_sup::child>("childAttr"),
   ldap::field<&broken_sup::orphan>("orphanAttr"),
   ldap::field<&broken_sup::parent>("parentAttr"),
@@ -505,7 +505,7 @@ struct no_syntax
 }// namespace
 
 template<>
-constexpr auto ldap::schema<no_syntax> = ldap::describe(ldap::object_class("top"),
+constexpr auto ldap::mapping<no_syntax> = ldap::describe(ldap::object_class("top"),
   ldap::field<&no_syntax::bare>("bareAttr"),
   ldap::field<&no_syntax::child>("bareChild"),
   ldap::field<&no_syntax::bare_text>("bareAttr"));
@@ -608,7 +608,7 @@ struct binary_as_binary
 }// namespace
 
 template<>
-constexpr auto ldap::schema<binary_as_text> = ldap::describe(ldap::object_class("top"),
+constexpr auto ldap::mapping<binary_as_text> = ldap::describe(ldap::object_class("top"),
   ldap::field<&binary_as_text::password>("userPassword"),
   ldap::field<&binary_as_text::photo>("jpegPhoto"),
   ldap::field<&binary_as_text::certificate>("userCertificate"),
@@ -620,7 +620,7 @@ constexpr auto ldap::schema<binary_as_text> = ldap::describe(ldap::object_class(
   ldap::field<&binary_as_text::description>("description"));
 
 template<>
-constexpr auto ldap::schema<binary_as_binary> = ldap::describe(ldap::object_class("top"),
+constexpr auto ldap::mapping<binary_as_binary> = ldap::describe(ldap::object_class("top"),
   ldap::field<&binary_as_binary::password>("userPassword"),
   ldap::field<&binary_as_binary::photo>("jpegPhoto"),
   ldap::field<&binary_as_binary::certificate>("userCertificate"));
@@ -778,7 +778,7 @@ struct named_thing
 }// namespace
 
 template<>
-constexpr auto ldap::schema<posix_user> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
+constexpr auto ldap::mapping<posix_user> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
   ldap::field<&posix_user::uid>("uid"),
   ldap::field<&posix_user::cn>("cn;lang-en"),
   ldap::field<&posix_user::sn>("surname"),
@@ -789,17 +789,17 @@ constexpr auto ldap::schema<posix_user> = ldap::describe(ldap::object_class("ine
   ldap::field<&posix_user::created>("createTimestamp", ldap::read_only));
 
 template<>
-constexpr auto ldap::schema<partial_user> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
+constexpr auto ldap::mapping<partial_user> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
   ldap::field<&partial_user::uid>("uid"),
   ldap::field<&partial_user::cn>("cn"),
   ldap::field<&partial_user::uid_number>("uidNumber", ldap::read_only),
   ldap::field<&partial_user::gid_number>("gidNumber"),
   ldap::field<&partial_user::home>("1.3.6.1.1.1.1.3"));
 
-template<> constexpr auto ldap::schema<no_classes> = ldap::describe(ldap::field<&no_classes::cn>("cn"));
+template<> constexpr auto ldap::mapping<no_classes> = ldap::describe(ldap::field<&no_classes::cn>("cn"));
 
 template<>
-constexpr auto ldap::schema<named_thing> =
+constexpr auto ldap::mapping<named_thing> =
   ldap::describe(ldap::object_class("namedThing"), ldap::field<&named_thing::cn>("cn"));
 
 TEST_CASE("schema: object class SUP, kind, MUST and MAY", "[schema]")
@@ -937,9 +937,9 @@ struct oid_named
 
 }// namespace
 
-template<> constexpr auto ldap::schema<last_named> = ldap::describe(ldap::field<&last_named::sn>("SN;lang-en"));
-template<> constexpr auto ldap::schema<alias_named> = ldap::describe(ldap::field<&alias_named::sn>("surname"));
-template<> constexpr auto ldap::schema<oid_named> = ldap::describe(ldap::field<&oid_named::sn>("2.5.4.4"));
+template<> constexpr auto ldap::mapping<last_named> = ldap::describe(ldap::field<&last_named::sn>("SN;lang-en"));
+template<> constexpr auto ldap::mapping<alias_named> = ldap::describe(ldap::field<&alias_named::sn>("surname"));
+template<> constexpr auto ldap::mapping<oid_named> = ldap::describe(ldap::field<&oid_named::sn>("2.5.4.4"));
 
 TEST_CASE("schema: a member named by an alias or OID is not_primary_name", "[schema][validate]")
 {
@@ -990,16 +990,16 @@ struct twice_unknown
 }// namespace
 
 template<>
-constexpr auto ldap::schema<twice_named> = ldap::describe(ldap::field<&twice_named::sn>("sn"),
+constexpr auto ldap::mapping<twice_named> = ldap::describe(ldap::field<&twice_named::sn>("sn"),
   ldap::field<&twice_named::surname>("surname"),
   ldap::field<&twice_named::by_oid>("2.5.4.4"));
 template<>
-constexpr auto ldap::schema<twice_with_options> = ldap::describe(ldap::field<&twice_with_options::cn>("cn"),
+constexpr auto ldap::mapping<twice_with_options> = ldap::describe(ldap::field<&twice_with_options::cn>("cn"),
   ldap::field<&twice_with_options::english>("cn;lang-en;x-a"),
   ldap::field<&twice_with_options::english_again>("commonName;X-A;Lang-En"),
   ldap::field<&twice_with_options::french>("cn;lang-fr"));
 template<>
-constexpr auto ldap::schema<twice_unknown> =
+constexpr auto ldap::mapping<twice_unknown> =
   ldap::describe(ldap::field<&twice_unknown::x>("x-unknown"), ldap::field<&twice_unknown::y>("x-unknown;lang-en"));
 
 TEST_CASE("schema: two members mapping one attribute type are duplicate_attribute", "[schema][validate]")
@@ -1202,7 +1202,7 @@ const std::pmr::vector<std::pmr::string> posix_classes{
 }// namespace
 
 template<>
-constexpr auto ldap::schema<posix_person> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<posix_person> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::auxiliary_class("posixAccount", "shadowAccount"),
   ldap::field<&posix_person::uid>("uid"),
   ldap::field<&posix_person::cn>("cn"),
@@ -1211,7 +1211,7 @@ constexpr auto ldap::schema<posix_person> = ldap::describe(ldap::object_class("i
   ldap::field<&posix_person::gid_number>("gidNumber"));
 
 template<>
-constexpr auto ldap::schema<wrongly_auxiliary> = ldap::describe(ldap::object_class("organizationalPerson"),
+constexpr auto ldap::mapping<wrongly_auxiliary> = ldap::describe(ldap::object_class("organizationalPerson"),
   ldap::auxiliary_class("person", "top", "x-noSuchClass"),
   ldap::field<&wrongly_auxiliary::cn>("cn"),
   ldap::field<&wrongly_auxiliary::sn>("sn"));
@@ -1325,14 +1325,14 @@ auto not_allowed(const ldap::schema_report &rep) -> std::vector<std::string>
 }// namespace
 
 template<>
-constexpr auto ldap::schema<forgot_auxiliary> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<forgot_auxiliary> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&forgot_auxiliary::uid>("uid"),
   ldap::field<&forgot_auxiliary::cn>("cn"),
   ldap::field<&forgot_auxiliary::sn>("sn"),
   ldap::field<&forgot_auxiliary::uid_number>("uidNumber"));
 
 template<>
-constexpr auto ldap::schema<spelled_members> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<spelled_members> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&spelled_members::cn>("cn;lang-en"),
   ldap::field<&spelled_members::surname>("SURNAME"),
   ldap::field<&spelled_members::user_id>("0.9.2342.19200300.100.1.1"),
@@ -1340,7 +1340,7 @@ constexpr auto ldap::schema<spelled_members> = ldap::describe(ldap::object_class
   ldap::field<&spelled_members::object_class>("objectClass"));
 
 template<>
-constexpr auto ldap::schema<odd_members> = ldap::describe(ldap::object_class("person"),
+constexpr auto ldap::mapping<odd_members> = ldap::describe(ldap::object_class("person"),
   ldap::field<&odd_members::cn>("cn"),
   ldap::field<&odd_members::sn>("sn"),
   ldap::field<&odd_members::title>("title", ldap::read_only),
@@ -1348,17 +1348,18 @@ constexpr auto ldap::schema<odd_members> = ldap::describe(ldap::object_class("pe
   ldap::field<&odd_members::marker>("x-undefined"));
 
 template<>
-constexpr auto ldap::schema<no_class_members> = ldap::describe(ldap::field<&no_class_members::uid_number>("uidNumber"));
+constexpr auto ldap::mapping<no_class_members> =
+  ldap::describe(ldap::field<&no_class_members::uid_number>("uidNumber"));
 
 template<>
-constexpr auto ldap::schema<extensible_person> = ldap::describe(ldap::object_class("person"),
+constexpr auto ldap::mapping<extensible_person> = ldap::describe(ldap::object_class("person"),
   ldap::auxiliary_class("extensibleObject"),
   ldap::field<&extensible_person::cn>("cn"),
   ldap::field<&extensible_person::sn>("sn"),
   ldap::field<&extensible_person::uid_number>("uidNumber"));
 
 template<>
-constexpr auto ldap::schema<under_name> =
+constexpr auto ldap::mapping<under_name> =
   ldap::describe(ldap::object_class("namedOnly"), ldap::field<&under_name::cn>("cn"));
 
 TEST_CASE("schema: a member no class allows is a warning", "[schema][validate][auxiliary]")
@@ -1569,7 +1570,7 @@ struct equality_members
 }// namespace
 
 template<>
-constexpr auto ldap::schema<equality_members> = ldap::describe(ldap::field<&equality_members::cn>("cn"),
+constexpr auto ldap::mapping<equality_members> = ldap::describe(ldap::field<&equality_members::cn>("cn"),
   ldap::field<&equality_members::photo>("x-photo"),
   ldap::field<&equality_members::thumbnail>("x-thumbnail"),
   ldap::field<&equality_members::seen>("x-seen", ldap::read_only));

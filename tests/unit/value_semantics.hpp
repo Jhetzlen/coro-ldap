@@ -112,7 +112,7 @@ template<class T, class Members = no_members> void check_value_semantics(const T
 	CHECK(moved_into.get_allocator().resource() == &rb);
 
 	// Nothing kept memory of a dead source, nothing went to the default resource.
-	CHECK(rs.outstanding() == 0);
+	CHECK(rs.outstanding_count() == 0);
 	CHECK(heap.allocations() == 0);
 
 	// A plain copy goes to the default resource, a plain move keeps the source's.

@@ -25,7 +25,7 @@ inline constexpr std::size_t max_filter_depth = 24;
 // Maximum number of filter elements, each substring part counted.
 inline constexpr std::size_t max_filter_elements = 10'000;
 
-// Limits applied by filter::raw and encode_filter.
+// Limits applied by filter::parse and encode_filter.
 struct filter_limits
 {
 	std::size_t max_depth = max_filter_depth;
@@ -83,9 +83,9 @@ class filter
 
 	// Parses RFC 4515 text into a tree on `mr`; invalid_filter with the
 	// position. Text without an outer '(' is read as if wrapped in one.
-	[[nodiscard]] static auto raw(std::string_view text,
+	[[nodiscard]] static auto parse(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
-	[[nodiscard]] static auto raw(std::string_view text,
+	[[nodiscard]] static auto parse(std::string_view text,
 	  const filter_limits &limits,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 
@@ -102,7 +102,7 @@ class filter
 	[[nodiscard]] auto depth() const noexcept -> std::size_t { return empty() ? 0 : depth_; }
 	[[nodiscard]] auto elements() const noexcept -> std::size_t { return empty() ? 0 : elements_; }
 
-	// Canonical RFC 4515 text, for logs; raw(to_string()) == *this.
+	// Canonical RFC 4515 text, for logs; parse(to_string()) == *this.
 	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
@@ -284,7 +284,7 @@ inline auto filter::root() const noexcept -> filter::view { return { this, root_
 [[nodiscard]] auto escape_filter_value(std::string_view value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
 
-// The inverse of escape_filter_value; invalid_filter on what filter::raw
+// The inverse of escape_filter_value; invalid_filter on what filter::parse
 // rejects in a value.
 [[nodiscard]] auto unescape_filter_value(std::string_view text,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::string>;

@@ -39,7 +39,7 @@ namespace {
 
 	// A response that only carries an LDAPResult: success gives its
 	// matchedDN, diagnosticMessage and controls, anything else the error.
-	auto to_response(result<message> m, std::string_view context) -> result<response>
+	auto to_response(result<message> m, std::string_view context) -> result<update_result>
 	{
 		if (!m) {
 			return std::unexpected(std::move(m.error()));
@@ -48,7 +48,7 @@ namespace {
 		if (!r.is_success()) {
 			return std::unexpected(r.to_error(context));
 		}
-		response out;
+		update_result out;
 		out.message_id = m->id;
 		out.matched_dn.assign(r.matched_dn);
 		out.diagnostic_message.assign(r.diagnostic_message);
@@ -57,13 +57,13 @@ namespace {
 	}
 
 	// A task that fails at once.
-	auto refuse(std::error_code code, std::string context) -> capy::task<result<response>>
+	auto refuse(std::error_code code, std::string context) -> capy::task<result<update_result>>
 	{
 		co_return fail(code, context);
 	}
 
 	// Not a coroutine: the update's task runs on the strand.
-	template<class Params> auto update(const core_ref &self, Params request) -> capy::task<result<response>>
+	template<class Params> auto update(const core_ref &self, Params request) -> capy::task<result<update_result>>
 	{
 		std::string context = detail::update_context(request);
 		if (!self) {
@@ -93,7 +93,7 @@ namespace {
 	// Sends `op` with the controls of `p` and waits for its `Response`.
 	template<class Response, class Params>
 	auto exchange(core_ref self, protocol_op op, const Params &p, const std::string &context)
-	  -> capy::task<result<response>>
+	  -> capy::task<result<update_result>>
 	{
 		auto msg = build_request(std::move(op), p.controls, self->mr(), context);
 		if (!msg) {
@@ -109,7 +109,7 @@ namespace {
 
 namespace detail {
 
-	auto add_impl(core_ref self, add_params request, std::string context) -> capy::task<result<response>>
+	auto add_impl(core_ref self, add_params request, std::string context) -> capy::task<result<update_result>>
 	{
 		add_request op(request.entry.to_string());
 		op.attributes.assign(request.attributes.begin(), request.attributes.end());
@@ -118,11 +118,14 @@ namespace detail {
 
 }// namespace detail
 
-auto connection::add(add_params request) -> capy::task<result<response>> { return update(core_, std::move(request)); }
+auto connection::add(add_params request) -> capy::task<result<update_result>>
+{
+	return update(core_, std::move(request));
+}
 
 namespace detail {
 
-	auto modify_impl(core_ref self, modify_params request, std::string context) -> capy::task<result<response>>
+	auto modify_impl(core_ref self, modify_params request, std::string context) -> capy::task<result<update_result>>
 	{
 		const scope_exit wipe{ [&request] noexcept {
 			for (auto &c : request.changes) {
@@ -140,19 +143,20 @@ namespace detail {
 
 }// namespace detail
 
-auto connection::modify(modify_params request) -> capy::task<result<response>>
+auto connection::modify(modify_params request) -> capy::task<result<update_result>>
 {
 	return update(core_, std::move(request));
 }
 
 namespace detail {
 
-	auto del_impl(core_ref self, del_params request, std::string context) -> capy::task<result<response>>
+	auto del_impl(core_ref self, del_params request, std::string context) -> capy::task<result<update_result>>
 	{
 		co_return co_await exchange<del_response>(self, del_request(request.entry.to_string()), request, context);
 	}
 
-	auto modify_dn_impl(core_ref self, modify_dn_params request, std::string context) -> capy::task<result<response>>
+	auto modify_dn_impl(core_ref self, modify_dn_params request, std::string context)
+	  -> capy::task<result<update_result>>
 	{
 		if (request.new_rdn.avas.empty()) {
 			co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
@@ -173,9 +177,12 @@ namespace detail {
 
 }// namespace detail
 
-auto connection::del(del_params request) -> capy::task<result<response>> { return update(core_, std::move(request)); }
+auto connection::del(del_params request) -> capy::task<result<update_result>>
+{
+	return update(core_, std::move(request));
+}
 
-auto connection::modify_dn(modify_dn_params request) -> capy::task<result<response>>
+auto connection::modify_dn(modify_dn_params request) -> capy::task<result<update_result>>
 {
 	return update(core_, std::move(request));
 }
@@ -205,7 +212,7 @@ namespace {
 			co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
 		}
 		compare_result out;
-		out.value = is_true;
+		out.matched = is_true;
 		out.matched_dn.assign(r.matched_dn);
 		out.diagnostic_message.assign(r.diagnostic_message);
 		out.controls.assign(m->controls.begin(), m->controls.end());

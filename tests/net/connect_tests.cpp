@@ -678,7 +678,7 @@ TEST_CASE("transport identity after connect", "[net][connect][tcp]")
 	CHECK(t->type() == net::transport::kind::tcp);
 	CHECK_FALSE(t->is_tls());
 	CHECK(t->is_open());
-	CHECK(std::string_view(t->name()) == srv.url("ldap"));// scheme://host:port only
+	CHECK(std::string_view(t->endpoint()) == srv.url("ldap"));// scheme://host:port only
 	server.get();
 	t->close();
 	CHECK_FALSE(t->is_open());
@@ -1748,20 +1748,20 @@ TEST_CASE("connect allocates the transport from the given resource", "[net][conn
 		auto t = run_task(ioc, net::connect(ioc, *u, {}, &counting));
 		REQUIRE(t.has_value());
 		server.get();
-		CHECK(t->name().get_allocator().resource() == &counting);
+		CHECK(t->endpoint().get_allocator().resource() == &counting);
 		CHECK(counting.allocations() >= 2);// the transport block and its name
-		CHECK(counting.outstanding() > 0);
+		CHECK(counting.outstanding_count() > 0);
 	}
-	CHECK(counting.outstanding() == 0);
+	CHECK(counting.outstanding_count() == 0);
 
 	jhetz::ldap::test::counting_resource for_wrap;
 	{
 		auto [a, b] = capy::test::make_stream_pair();
 		auto t = net::transport::wrap(std::move(a), "a custom stream with a long name", &for_wrap);
-		CHECK(t.name().get_allocator().resource() == &for_wrap);
+		CHECK(t.endpoint().get_allocator().resource() == &for_wrap);
 		CHECK(for_wrap.allocations() == 3);// the transport block, its name and the stream
 	}
-	CHECK(for_wrap.outstanding() == 0);
+	CHECK(for_wrap.outstanding_count() == 0);
 }
 
 TEST_CASE("TLS peer name: server_name, else the host without an IPv6 zone", "[net][connect][tls]")

@@ -16,7 +16,7 @@ class counting_resource final : public std::pmr::memory_resource
 
 	[[nodiscard]] auto allocations() const noexcept -> std::size_t { return allocations_; }
 	[[nodiscard]] auto bytes() const noexcept -> std::size_t { return bytes_; }
-	[[nodiscard]] auto outstanding() const noexcept -> std::size_t { return outstanding_; }
+	[[nodiscard]] auto outstanding_count() const noexcept -> std::size_t { return outstanding_; }
 
   private:
 	auto do_allocate(std::size_t n, std::size_t align) -> void * override

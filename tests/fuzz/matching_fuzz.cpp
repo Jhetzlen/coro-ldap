@@ -25,7 +25,7 @@ auto dn_everywhere(const ldap::attribute &) -> std::string_view { return "distin
 // 2.5.4.3; uid, userid): distinguishedNameMatch stays symmetric.
 auto by_spelling(const ldap::attribute &t) -> std::string_view
 {
-	const std::string_view name = t.name();
+	const std::string_view name = t.text();
 	if (name == "cn" || name == "uid") {
 		return "caseExactMatch";
 	}

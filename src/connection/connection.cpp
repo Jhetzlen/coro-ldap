@@ -100,17 +100,20 @@ connection::~connection()
 
 auto connection::is_open() const noexcept -> bool { return core_ && core_->published_open(); }
 
-auto connection::name() const noexcept -> std::string_view
+auto connection::endpoint() const noexcept -> std::string_view
 {
 	if (!core_) {
 		return {};
 	}
-	return core_->transport().name();
+	return core_->transport().endpoint();
 }
 
 auto connection::executor() const noexcept -> connection::executor_type { return core_->executor(); }
 
-auto connection::outstanding() const noexcept -> std::size_t { return !core_ ? 0 : core_->published_outstanding(); }
+auto connection::outstanding_count() const noexcept -> std::size_t
+{
+	return !core_ ? 0 : core_->published_outstanding();
+}
 
 auto connection::bind_count() const noexcept -> std::uint64_t { return !core_ ? 0 : core_->published_bind_count(); }
 

@@ -747,7 +747,7 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 		if (!f) {
 			return std::unexpected(std::move(f.error()));
 		}
-		auto parsed = filter::raw(*f, mr);
+		auto parsed = filter::parse(*f, mr);
 		if (!parsed) {
 			return bad(detail::format("invalid filter ({})", parsed.error().context), p.offset[3]);
 		}

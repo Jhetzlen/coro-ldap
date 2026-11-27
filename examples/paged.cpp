@@ -38,7 +38,7 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		if (!*person) {
 			co_return 0;
 		}
-		std::cout << "page " << pages->pages() << ": " << (*person)->find("mail")->front() << '\n';
+		std::cout << "page " << pages->page_count() << ": " << (*person)->find("mail")->front() << '\n';
 	}
 }
 

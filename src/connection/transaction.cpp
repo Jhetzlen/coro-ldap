@@ -269,7 +269,7 @@ namespace {
 
 	// Runs one update of the transaction with the connection's detail::*_impl.
 	template<class Params>
-	auto run_update(transaction::state *s, Params request, std::string context) -> capy::task<result<response>>
+	auto run_update(transaction::state *s, Params request, std::string context) -> capy::task<result<update_result>>
 	{
 		if (auto e = unusable(s, context)) {
 			co_return std::unexpected(std::move(*e));
@@ -287,7 +287,7 @@ namespace {
 		co_return r;
 	}
 
-	template<class Params> auto update(transaction::state *s, Params request) -> capy::task<result<response>>
+	template<class Params> auto update(transaction::state *s, Params request) -> capy::task<result<update_result>>
 	{
 		std::string context = detail::update_context(request);
 		return detail::on_strand(conn_of(s), run_update(s, std::move(request), std::move(context)));
@@ -341,16 +341,22 @@ auto transaction::identifier() const noexcept -> std::string_view
 
 auto transaction::is_open() const noexcept -> bool { return state_ != nullptr && state_->open; }
 
-auto transaction::add(add_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
-
-auto transaction::modify(modify_params request) -> capy::task<result<response>>
+auto transaction::add(add_params request) -> capy::task<result<update_result>>
 {
 	return update(state_, std::move(request));
 }
 
-auto transaction::del(del_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
+auto transaction::modify(modify_params request) -> capy::task<result<update_result>>
+{
+	return update(state_, std::move(request));
+}
 
-auto transaction::modify_dn(modify_dn_params request) -> capy::task<result<response>>
+auto transaction::del(del_params request) -> capy::task<result<update_result>>
+{
+	return update(state_, std::move(request));
+}
+
+auto transaction::modify_dn(modify_dn_params request) -> capy::task<result<update_result>>
 {
 	return update(state_, std::move(request));
 }

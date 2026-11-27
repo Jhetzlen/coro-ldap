@@ -368,10 +368,10 @@ auto parse_attribute_type(std::string_view text) -> result<attribute_type>
 	return parse_definition(text, definition_kind::attribute_type).and_then(to_attribute_type);
 }
 
-auto parse_object_class(std::string_view text) -> result<object_class_type>
+auto parse_object_class(std::string_view text) -> result<object_class_description>
 {
 	return parse_definition(text, definition_kind::object_class).transform([](definition &&d) {
-		object_class_type c;
+		object_class_description c;
 		c.oid = std::move(d.oid);
 		c.names = valid_names(d.get("NAME"));
 		c.sup = valid_oids(d.get("SUP"));
@@ -474,7 +474,7 @@ auto server_schema::find_attribute(std::string_view name) const noexcept -> cons
 	return it == attribute_index_.end() ? nullptr : &attributes_[it->second];
 }
 
-auto server_schema::find_object_class(std::string_view name) const noexcept -> const object_class_type *
+auto server_schema::find_object_class(std::string_view name) const noexcept -> const object_class_description *
 {
 	const auto it = class_index_.find(name);
 	return it == class_index_.end() ? nullptr : &classes_[it->second];
@@ -585,7 +585,7 @@ namespace {
 
 	// c's first NAME that s resolves to c, else its OID: a server may give two
 	// classes one NAME, and an issue's name must find the class it reports.
-	auto class_name(const server_schema &s, const object_class_type &c) -> std::string_view
+	auto class_name(const server_schema &s, const object_class_description &c) -> std::string_view
 	{
 		const auto it =
 		  std::ranges::find_if(c.names, [&](const std::string &n) { return s.find_object_class(n) == &c; });
@@ -598,7 +598,7 @@ namespace {
 	// A class whose MUSTs apply, and the declared class it was reached from.
 	struct reached_class
 	{
-		const object_class_type *c;
+		const object_class_description *c;
 		std::string_view from;
 	};
 
@@ -609,9 +609,9 @@ namespace {
 	{
 		// Hashed: a server's schema may chain thousands of classes.
 		std::vector<reached_class> all;
-		std::unordered_set<const object_class_type *> seen;
+		std::unordered_set<const object_class_description *> seen;
 		for (const char *name : classes) {
-			if (const object_class_type *c = s.find_object_class(name); c != nullptr && seen.insert(c).second) {
+			if (const object_class_description *c = s.find_object_class(name); c != nullptr && seen.insert(c).second) {
 				all.push_back({ .c = c, .from = {} });
 			}
 		}
@@ -620,7 +620,7 @@ namespace {
 			const reached_class r = all[i];
 			const std::string_view declared = r.from.empty() ? class_name(s, *r.c) : r.from;
 			for (const auto &sup : r.c->sup) {
-				if (const object_class_type *c = s.find_object_class(sup); c != nullptr) {
+				if (const object_class_description *c = s.find_object_class(sup); c != nullptr) {
 					if (seen.insert(c).second) {
 						all.push_back({ .c = c, .from = declared });
 					}
@@ -709,7 +709,7 @@ namespace {
 	}
 
 	// RFC 4512 section 4.3.
-	auto is_extensible_object(const object_class_type &c) -> bool
+	auto is_extensible_object(const object_class_description &c) -> bool
 	{
 		return c.oid == "1.3.6.1.4.1.1466.101.120.111" || std::ranges::any_of(c.names, [](const std::string &n) {
 			return detail::iequals(n, "extensibleObject");
@@ -720,7 +720,7 @@ namespace {
 	auto content_rules(const server_schema &s, const std::vector<reached_class> &all)
 	  -> std::vector<const dit_content_rule *>
 	{
-		std::unordered_set<const object_class_type *> supers;
+		std::unordered_set<const object_class_description *> supers;
 		for (const reached_class &r : all) {
 			for (const auto &sup : r.c->sup) {
 				supers.insert(s.find_object_class(sup));
@@ -799,7 +799,7 @@ namespace {
 		if (rules.empty()) {
 			return;
 		}
-		const auto listed = [&s, rules](const object_class_type *c) {
+		const auto listed = [&s, rules](const object_class_description *c) {
 			return std::ranges::any_of(rules, [&s, c](const dit_content_rule *rule) {
 				return std::ranges::any_of(
 				  rule->aux, [&s, c](const std::string &name) { return s.find_object_class(name) == c; });
@@ -830,7 +830,7 @@ namespace detail {
 
 	void check_auxiliary_class(const server_schema &s, std::string_view name, schema_report &out)
 	{
-		const object_class_type *c = s.find_object_class(name);
+		const object_class_description *c = s.find_object_class(name);
 		if (c == nullptr || c->kind == object_class_kind::auxiliary) {
 			return;
 		}

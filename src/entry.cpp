@@ -17,7 +17,7 @@ auto entry::find(std::string_view type) const noexcept -> const std::pmr::vector
 {
 	const bool has_options = type.contains(';');
 	const auto it = std::ranges::find_if(attributes, [&](const attribute_values &a) {
-		return has_options ? detail::same_description(a.type.name(), type) : detail::iequals(a.type.name(), type);
+		return has_options ? detail::same_description(a.type.text(), type) : detail::iequals(a.type.text(), type);
 	});
 	return it == attributes.end() ? nullptr : &it->values;
 }
@@ -39,7 +39,7 @@ auto entry::from(search_result_entry e) -> entry
 			auto &a = out.attributes.emplace_back();
 			a.type = attribute::unchecked(std::move(pa.type));
 			a.values = std::move(pa.values);
-			index.emplace(std::string_view(a.type.name()), out.attributes.size() - 1);
+			index.emplace(std::string_view(a.type.text()), out.attributes.size() - 1);
 		} else {
 			out.attributes[it->second].values.append_range(pa.values | std::views::as_rvalue);
 		}

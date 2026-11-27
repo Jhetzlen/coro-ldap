@@ -321,7 +321,7 @@ TEST_CASE("assertion control", "[controls][assertion]")
 	// The value is the Filter itself: equalityMatch [3] { "cn", "x" }.
 	CHECK(value_hex(*c) == "A3 07 04 02 63 6E 04 01 78");
 
-	const auto f = ldap::filter::raw("(&(objectClass=person)(!(sn=Doe)))").value();
+	const auto f = ldap::filter::parse("(&(objectClass=person)(!(sn=Doe)))").value();
 	const auto lenient = ldap::to_control(ldap::assertion{ .filter = f, .critical = false });
 	REQUIRE(lenient.has_value());
 	CHECK_FALSE(lenient->criticality);
@@ -351,12 +351,12 @@ TEST_CASE("matched values request control", "[controls][matched_values]")
 	// Every SimpleFilterItem choice, in order: [3] .. [9], the extensible
 	// match as SimpleMatchingAssertion (rule [1], type [2], value [3]).
 	const auto all = ldap::to_control(ldap::matched_values{ .values_return_filter = { attr("cn") == "a",
-															  ldap::filter::raw("(cn=a*b)").value(),
+															  ldap::filter::parse("(cn=a*b)").value(),
 															  attr("n") >= "1",
 															  attr("n") <= "2",
 															  attr("cn").present(),
 															  attr("cn").approx("c"),
-															  ldap::filter::raw("(cn:2.5.13.5:=d)").value() },
+															  ldap::filter::parse("(cn:2.5.13.5:=d)").value() },
 	  .critical = true });
 	REQUIRE(all.has_value());
 	CHECK(all->criticality);
@@ -371,12 +371,12 @@ TEST_CASE("matched values request control", "[controls][matched_values]")
 	CHECK(*back
 		  == ldap::matched_values{ .values_return_filter = {
 									 attr("cn") == "a",
-									 ldap::filter::raw("(cn=a*b)").value(),
+									 ldap::filter::parse("(cn=a*b)").value(),
 									 attr("n") >= "1",
 									 attr("n") <= "2",
 									 attr("cn").present(),
 									 attr("cn").approx("c"),
-									 ldap::filter::raw("(cn:2.5.13.5:=d)").value(),
+									 ldap::filter::parse("(cn:2.5.13.5:=d)").value(),
 								   },
 			.critical = true });
 
@@ -407,10 +407,10 @@ TEST_CASE("matched values items RFC 3876 excludes", "[controls][matched_values]"
 		  == "matched values: item 1 is (|...), not a simple filter item (RFC 3876 section 2)");
 	CHECK(refused({ .values_return_filter = { !(attr("cn") == "x") } }).context
 		  == "matched values: item 1 is (!...), not a simple filter item (RFC 3876 section 2)");
-	CHECK(refused({ .values_return_filter = { ldap::filter::raw("(&)").value() } }).context
+	CHECK(refused({ .values_return_filter = { ldap::filter::parse("(&)").value() } }).context
 		  == "matched values: item 1 is (&...), not a simple filter item (RFC 3876 section 2)");
 	// SimpleMatchingAssertion has no dnAttributes.
-	const auto dn = refused({ .values_return_filter = { ldap::filter::raw("(ou:dn:=people)").value() } });
+	const auto dn = refused({ .values_return_filter = { ldap::filter::parse("(ou:dn:=people)").value() } });
 	CHECK(dn.code == ldap::client_errc::invalid_filter);
 	CHECK(dn.context
 		  == "matched values: item 1 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
@@ -424,7 +424,7 @@ TEST_CASE("matched values items RFC 3876 excludes", "[controls][matched_values]"
 	CHECK(failed.context == "matched values: item 2: why");
 	// Without dnAttributes an extensible match is fine.
 	CHECK(
-	  ldap::to_control(ldap::matched_values{ .values_return_filter = { ldap::filter::raw("(ou:=people)").value() } })
+	  ldap::to_control(ldap::matched_values{ .values_return_filter = { ldap::filter::parse("(ou:=people)").value() } })
 		.has_value());
 }
 
@@ -448,7 +448,7 @@ TEST_CASE("parse_values_return_filter", "[controls][matched_values]")
 	REQUIRE(escaped->size() == 3);
 	CHECK((*escaped)[0] == (attr("cn") == "a)b("));
 	CHECK((*escaped)[1] == attr("sn").starts_with("\xC3\x85"));
-	CHECK((*escaped)[2] == ldap::filter::raw("(cn:caseExactMatch:=x)").value());
+	CHECK((*escaped)[2] == ldap::filter::parse("(cn:caseExactMatch:=x)").value());
 
 	// What libldap sends for that list (ldapsearch -E 'mv=((mail=*example*)(cn:caseExactMatch:=x))').
 	const auto libldap = ldap::parse_values_return_filter("((mail=*example*)(cn:caseExactMatch:=x))");
@@ -529,7 +529,7 @@ auto many_substrings(std::size_t parts) -> ldap::filter
 		text += "*x";
 	}
 	text += ')';
-	auto f = ldap::filter::raw(text, ldap::filter_limits{ .max_elements = 2 * ldap::max_filter_elements });
+	auto f = ldap::filter::parse(text, ldap::filter_limits{ .max_elements = 2 * ldap::max_filter_elements });
 	REQUIRE(f.has_value());
 	REQUIRE(f->elements() == parts + 1);
 	return std::move(*f);

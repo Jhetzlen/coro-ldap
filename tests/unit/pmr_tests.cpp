@@ -93,7 +93,7 @@ TEST_CASE("decode allocates only from decode_options::memory", "[pmr][message]")
 			CHECK(**d == m);
 			CHECK((*d)->get_allocator().resource() == &supplied);
 		}
-		CHECK(supplied.outstanding() == 0);// all given back when the message is destroyed
+		CHECK(supplied.outstanding_count() == 0);// all given back when the message is destroyed
 	}
 }
 
@@ -176,13 +176,13 @@ TEST_CASE("a builder-made filter and an encoding allocate only from the given re
 	CHECK(hex(**bytes) == hex(*ldap::encode(heap)));
 }
 
-TEST_CASE("filter::raw and decode_filter allocate from the given resource", "[pmr][filter]")
+TEST_CASE("filter::parse and decode_filter allocate from the given resource", "[pmr][filter]")
 {
 	std::byte storage[8192];
 	std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
 	scoped_default_resource guard(std::pmr::null_memory_resource());
 	// Unwrapped text and extensible matches without dnAttributes too.
-	auto f = ldap::filter::raw(
+	auto f = ldap::filter::parse(
 	  "&(cn=a-long-value-that-needs-memory*)(|(x=1)(y:dn:1.2.3:=z)(cn:2.5.13.5:=x)(:1.2.3:=v)(sn:=w))", &arena);
 	REQUIRE(f.has_value());
 	CHECK(f->get_allocator().resource() == &arena);
@@ -306,7 +306,7 @@ TEST_CASE("dn, attribute and entry allocate from the given resource", "[pmr][dn]
 
 	auto attr = ldap::attribute::parse("userCertificate;binary-with-a-long-option", &arena);
 	REQUIRE(attr.has_value());
-	CHECK(attr->name().get_allocator().resource() == &arena);
+	CHECK(attr->text().get_allocator().resource() == &arena);
 
 	// An entry made from a search entry on the arena lives there too.
 	ldap::search_result_entry e(&arena);
@@ -331,7 +331,7 @@ TEST_CASE("copies of arena objects go to the default resource", "[pmr]")
 	{
 		std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
 		auto d = ldap::dn::parse("cn=a value that is long enough,dc=example,dc=org", &arena);
-		auto f = ldap::filter::raw("(cn=a value that is long enough*)", &arena);
+		auto f = ldap::filter::parse("(cn=a value that is long enough*)", &arena);
 		ldap::testing::decode_options options;
 		options.memory = &arena;
 		auto m = ldap::testing::decode(*ldap::encode(ldap::test::sample_messages()[12]), options);

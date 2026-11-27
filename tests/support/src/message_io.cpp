@@ -15,7 +15,7 @@ auto read_message(net::transport &t, net::read_buffer &buf, read_options options
 	auto m = decode(buf.data().first(*size), options.decode);
 	buf.consume(*size);
 	if (!m) {
-		co_return std::unexpected(detail::with_context(std::move(m.error()), detail::format("read {}", t.name())));
+		co_return std::unexpected(detail::with_context(std::move(m.error()), detail::format("read {}", t.endpoint())));
 	}
 	co_return m;
 }

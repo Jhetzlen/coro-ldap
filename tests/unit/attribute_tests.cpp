@@ -145,7 +145,17 @@ TEST_CASE("valid attribute descriptions", "[attribute]")
 	INFO(good);
 	auto a = ldap::attribute::parse(good);
 	REQUIRE(a);
-	CHECK(a->name() == std::string_view(good));
+	CHECK(a->text() == std::string_view(good));
+}
+
+TEST_CASE("attribute::name is the type without options, text the whole description", "[attribute]")
+{
+	CHECK(ldap::attribute{ "cn" }.name() == "cn");
+	CHECK(ldap::attribute{ "cn;lang-de" }.name() == "cn");
+	CHECK(ldap::attribute{ "cn;lang-de" }.text() == "cn;lang-de");
+	CHECK(ldap::attribute{ "userCertificate;binary" }.name() == "userCertificate");
+	CHECK(ldap::attribute{ "2.5.4.3;x" }.name() == "2.5.4.3");
+	CHECK(ldap::attribute{}.name().empty());
 }
 
 TEST_CASE("invalid attribute descriptions", "[attribute]")
@@ -370,7 +380,7 @@ TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")
 	const ldap::attribute a{ "objectClass" };
 	const ldap::attribute b = *ldap::attribute::parse("OBJECTCLASS");
 	CHECK(a == b);
-	CHECK(a.name() == "objectClass");// spelling kept
+	CHECK(a.text() == "objectClass");// spelling kept
 	CHECK(std::hash<ldap::attribute>{}(a) == std::hash<ldap::attribute>{}(b));
 	CHECK(a != ldap::attribute{ "objectClasses" });
 	CHECK(ldap::attribute{ "cn;LANG-EN" } == ldap::attribute{ "CN;lang-en" });
@@ -392,7 +402,7 @@ TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")
 
 	// Server-supplied names are kept as sent.
 	const auto range = ldap::attribute::unchecked("member;range=0-1499");
-	CHECK(range.name() == "member;range=0-1499");
+	CHECK(range.text() == "member;range=0-1499");
 	CHECK(range == ldap::attribute::unchecked("MEMBER;RANGE=0-1499"));
 }
 
@@ -408,8 +418,8 @@ TEST_CASE("entry from a search result entry", "[entry]")
 	const auto x = ldap::entry::from(e);
 	CHECK(x.dn == "uid=jdoe,dc=example,dc=org");
 	REQUIRE(x.attributes.size() == 5);
-	CHECK(x.attributes[0].type.name() == "cn");
-	CHECK(x.attributes[1].type.name() == "objectClass");
+	CHECK(x.attributes[0].type.text() == "cn");
+	CHECK(x.attributes[1].type.text() == "objectClass");
 
 	const auto *cn = x.find("CN");
 	REQUIRE(cn != nullptr);

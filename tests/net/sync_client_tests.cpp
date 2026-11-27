@@ -192,7 +192,7 @@ TEST_CASE("sync client: acquire, then operations on the lease", "[net][sync][cli
 	  unbind_read() } });
 	{
 		ldap::sync::client pool(options_for(srv.url()));
-		CHECK(pool.connections() == 0);// opened lazily
+		CHECK(pool.connection_count() == 0);// opened lazily
 		auto l = pool.acquire();
 		REQUIRE(l.has_value());
 		CHECK(static_cast<bool>(*l));
@@ -204,7 +204,7 @@ TEST_CASE("sync client: acquire, then operations on the lease", "[net][sync][cli
 		REQUIRE(found->entries.size() == 1);
 		CHECK(found->entries.front() == expected_entry(jdoe, "John"));
 		CHECK(ldap::sync::who_am_i(*l) == "dn:" + std::string(admin));
-		CHECK(pool.connections() == 1);
+		CHECK(pool.connection_count() == 1);
 		ldap::sync::lease moved = std::move(*l);
 		CHECK_FALSE(static_cast<bool>(*l));
 		CHECK(l->server() == ldap::url{});
@@ -215,7 +215,7 @@ TEST_CASE("sync client: acquire, then operations on the lease", "[net][sync][cli
 		moved.release();
 		CHECK_FALSE(static_cast<bool>(moved));
 		moved.release();// again: nothing happens
-		CHECK(pool.connections() == 1);// idle in the pool
+		CHECK(pool.connection_count() == 1);// idle in the pool
 	}// destroyed: the idle connection is unbound, then the thread joined
 	srv.stop();
 	const auto &got = srv.log(0);
@@ -274,7 +274,7 @@ TEST_CASE("sync: a search ending with a limit code returns its entries", "[net][
 			REQUIRE(on_lease.has_value());
 			CHECK(on_lease->result_code == 4);
 			CHECK(on_lease->entries.size() == 1);
-			CHECK(pool.connections() == 1);// not retried
+			CHECK(pool.connection_count() == 1);// not retried
 		}
 		srv.stop();
 		CHECK_THAT(srv.log(0).error, IsEmpty());
@@ -376,7 +376,7 @@ TEST_CASE("sync: search_stream reads one message at a time", "[net][sync][client
 			REQUIRE(on_lease.has_value());
 			CHECK(on_lease->next().has_value());
 			CHECK_FALSE(on_lease->next()->has_value());
-			CHECK(pool.connections() == 1);
+			CHECK(pool.connection_count() == 1);
 		}
 		srv.stop();
 		CHECK_THAT(srv.log(0).error, IsEmpty());
@@ -408,7 +408,7 @@ TEST_CASE("sync: search_paged on a sync::client and a sync::lease", "[net][sync]
 		auto on_lease = ldap::sync::search_paged(*l, people_search(), 1);
 		REQUIRE(on_lease.has_value());
 		CHECK(on_lease->entries.size() == 1);
-		CHECK(pool.connections() == 1);
+		CHECK(pool.connection_count() == 1);
 	}
 	srv.stop();
 	CHECK_THAT(srv.log(0).error, IsEmpty());
@@ -458,7 +458,7 @@ TEST_CASE("sync client: the read forwarders retry once on another connection", "
 		REQUIRE(r->entries.size() == 1);
 		CHECK(r->entries.front() == expected_entry(jdoe, "John"));
 		CHECK(srv.accepted() == 2);
-		CHECK(pool.connections() == 1);
+		CHECK(pool.connection_count() == 1);
 	}
 	SECTION("compare(): the server is busy")
 	{
@@ -467,7 +467,7 @@ TEST_CASE("sync client: the read forwarders retry once on another connection", "
 		ldap::sync::client pool(options_for(srv.url()));
 		auto r = pool.compare({ .entry = jdoe_dn, .attribute = "cn", .value = "John" });
 		REQUIRE(r.has_value());
-		CHECK(r->value);
+		CHECK(r->matched);
 		CHECK(srv.accepted() == 2);
 	}
 	SECTION("who_am_i() through extended(): a write forwarder, not retried once sent")
@@ -509,7 +509,7 @@ TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
 			CHECK(pool.modify({ .object = jdoe_dn, .changes = { ldap::mod::replace("cn", { "J" }) } }).has_value());
 			CHECK(pool.del({ .entry = jdoe_dn }).has_value());
 			CHECK(pool.modify_dn({ .entry = jdoe_dn, .new_rdn = ldap::rdn{ "uid=j" } }).has_value());
-			CHECK(pool.connections() == 1);
+			CHECK(pool.connection_count() == 1);
 		}
 		srv.stop();
 		CHECK_THAT(srv.log(0).error, IsEmpty());
@@ -581,7 +581,7 @@ TEST_CASE("sync client: Active Directory passwords on a lease and on the client"
 			CHECK(ldap::ad::reset_password(*l, jdoe_dn, "N3w-S3cret").has_value());
 			l->release();
 			CHECK(ldap::ad::change_password(pool, jdoe_dn, "0ld-S3cret", "N3w-S3cret").has_value());
-			CHECK(pool.connections() == 1);
+			CHECK(pool.connection_count() == 1);
 		}
 		srv.stop();
 		CHECK_THAT(srv.log(0).error, IsEmpty());
@@ -623,7 +623,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 	{
 		ldap::result<ldap::sync::lease> acquired{};
 		ldap::result<std::string> forwarded{};
-		ldap::result<ldap::response> written{};
+		ldap::result<ldap::update_result> written{};
 		ldap::result<std::string> on_lease{};
 		ldap::result<ldap::server_schema> schema{};
 		std::size_t connections = 0;
@@ -637,7 +637,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 		  r.written = p.del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } });
 		  r.on_lease = ldap::sync::who_am_i(l);
 		  r.schema = ldap::sync::load_schema(p);
-		  r.connections = p.connections();
+		  r.connections = p.connection_count();
 		  out.set_value(std::move(r));
 		  co_return;
 	  }(pool, *held, got));
@@ -660,7 +660,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 	CHECK(ldap::sync::who_am_i(*held) == "dn:cn=me");
 	CHECK(ldap::sync::run(pool, [](ldap::client &a) { return ldap::who_am_i(a); }) == "dn:cn=me");
 	CHECK(ldap::sync::run(*held, [](ldap::connection &a) { return ldap::who_am_i(a); }) == "dn:cn=me");
-	CHECK(pool.connections() == 1);
+	CHECK(pool.connection_count() == 1);
 }
 
 namespace {
@@ -721,7 +721,7 @@ TEST_CASE("sync client: close() from the I/O thread", "[net][sync][client][close
 	auto after = ldap::sync::who_am_i(pool);
 	REQUIRE_FALSE(after.has_value());
 	CHECK(after.error().code == ldap::client_errc::not_connected);
-	CHECK(pool.connections() == 0);
+	CHECK(pool.connection_count() == 0);
 }
 
 TEST_CASE("sync client: destroyed while a lease is outstanding", "[net][sync][client][close]")
@@ -781,12 +781,12 @@ TEST_CASE("sync client: a lease released or destroyed on the I/O thread", "[net]
 		released.get_future().wait();
 	}
 	CHECK_FALSE(static_cast<bool>(*held));
-	CHECK(pool.connections() == 1);
+	CHECK(pool.connection_count() == 1);
 	// The only connection is back in the pool: an exclusive lease gets it.
 	auto again = pool.acquire_exclusive();
 	REQUIRE(again.has_value());
 	CHECK(ldap::sync::who_am_i(*again) == "dn:cn=me");
-	CHECK(pool.connections() == 1);
+	CHECK(pool.connection_count() == 1);
 }
 
 TEST_CASE("sync client: a transaction outlives its temporary lease and the client", "[net][sync][client][transaction]")
@@ -853,8 +853,8 @@ TEST_CASE("sync client: many threads share the pool", "[net][sync][client]")
 	}
 	CHECK(failures == 0);
 	CHECK(srv.requests == threads * per_thread);
-	CHECK(pool.connections() >= 1);
-	CHECK(pool.connections() <= max_connections);
+	CHECK(pool.connection_count() >= 1);
+	CHECK(pool.connection_count() <= max_connections);
 }
 
 TEST_CASE("sync client: chasing referrals", "[net][sync][client][referral]")
@@ -880,9 +880,9 @@ TEST_CASE("sync client: chasing referrals", "[net][sync][client][referral]")
 		CHECK(found->entries.front() == expected_entry(jdoe, "B"));
 		auto same = pool.compare({ .entry = jdoe_dn, .attribute = "cn", .value = "B" });
 		REQUIRE(same.has_value());
-		CHECK(same->value);
-		REQUIRE(same->referrals.size() == 1);
-		CHECK(same->referrals[0].outcome == ldap::referral_outcome::followed);
+		CHECK(same->matched);
+		REQUIRE(same->referral_attempts.size() == 1);
+		CHECK(same->referral_attempts[0].outcome == ldap::referral_outcome::followed);
 	}
 	a.stop();
 	b.stop();
@@ -907,9 +907,9 @@ TEST_CASE("sync client: a compare's follow_referrals overrides the client's", "[
 		ldap::sync::client pool(std::move(options));
 		auto chased = pool.compare({ .entry = jdoe_dn, .attribute = "cn", .value = "B", .follow_referrals = true });
 		REQUIRE(chased.has_value());
-		CHECK(chased->value);
-		REQUIRE(chased->referrals.size() == 1);
-		CHECK(chased->referrals[0].outcome == ldap::referral_outcome::followed);
+		CHECK(chased->matched);
+		REQUIRE(chased->referral_attempts.size() == 1);
+		CHECK(chased->referral_attempts[0].outcome == ldap::referral_outcome::followed);
 	}
 	{
 		auto options = options_for(a.url());
@@ -942,9 +942,9 @@ struct badly_typed_card
 }// namespace
 
 template<>
-constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+constexpr auto ldap::mapping<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
 template<>
-constexpr auto ldap::schema<badly_typed_card> =
+constexpr auto ldap::mapping<badly_typed_card> =
   ldap::describe(ldap::object_class("person"), ldap::field<&badly_typed_card::cn>("cn"));
 
 namespace {

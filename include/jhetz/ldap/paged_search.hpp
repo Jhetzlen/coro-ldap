@@ -41,7 +41,7 @@ class paged_search
 
 	[[nodiscard]] auto done() const noexcept -> bool;
 	// 1 after ldap::search_paged_stream().
-	[[nodiscard]] auto pages() const noexcept -> std::size_t;
+	[[nodiscard]] auto page_count() const noexcept -> std::size_t;
 	// References of every page so far, in order.
 	[[nodiscard]] auto references() const noexcept -> const string_list &;
 	[[nodiscard]] auto reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const

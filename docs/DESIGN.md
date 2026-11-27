@@ -172,7 +172,7 @@ auto f = attr("objectClass") == "person"
 auto g = attr("uidNumber") >= "1000" && attr("sn").approx("smith");
 
 // Text from config or users: parsed once, here.
-ldap::result<ldap::filter> h = ldap::filter::raw("(&(uid=jdoe)(mail=*))");
+ldap::result<ldap::filter> h = ldap::filter::parse("(&(uid=jdoe)(mail=*))");
 if (h) {
     f = std::move(f) && *h;
 }
@@ -191,7 +191,7 @@ f.to_string();   // "(&(objectClass=person)...)" for logs
 | `attr(a).matches(rule, v)`, `matches(rule, v, true)` | extensible match `(a:rule:=v)`, `(a:dn:rule:=v)`; empty rule gives `(a:=v)` |
 | `rule_matches(rule, v)`, `rule_matches(rule, v, true)` | `(:rule:=v)`, `(:dn:rule:=v)` (rule required) |
 | `f && g`, `f \|\| g`, `!f` | and / or / not; chains are flattened, so `f && g && h` is one and-node |
-| `filter::raw(text)` | parsed once → `result<filter>`; malformed text fails here with `invalid_filter` |
+| `filter::parse(text)` | parsed once → `result<filter>`; malformed text fails here with `invalid_filter` |
 
 - Combining is adding a node: a parsed filter keeps its exact meaning inside
   a larger one (there is no text concatenation, so no wrapping rules).
@@ -389,7 +389,7 @@ server's bad control fails only the caller who asks for it.
   rejected: it would duplicate the filter builders for no stronger check
   than the run-time one. `parse_values_return_filter()` reads the string
   form of RFC 3876 section 5 (`((mail=*@example.org)(cn=*))`, or one item
-  alone), item by item with `filter::raw`, and
+  alone), item by item with `filter::parse`, and
   `testing::decode_matched_values()` reads the control back (the items
   share one `max_filter_elements` budget). OpenLDAP implements it in slapd itself;
   it leaves out an attribute with no matching value, where RFC 3876 returns
@@ -558,7 +558,7 @@ of the `directory` concept), `extended_result` for extended operations; the free
 `ldap::password_modify()` (RFC 3062) the generated password, if any
 (passwords never appear in error contexts).
 Any other result code is an error. compareTrue /
-compareFalse map to `compare_result::value` `true` / `false` (a compare answered with success is
+compareFalse map to `compare_result::matched` `true` / `false` (a compare answered with success is
 an error: it is not a valid answer). referral (10) is an error with the
 URIs in `error::referrals`; saslBindInProgress (14) is an error for a
 simple bind and the "continue" signal of `sasl_bind` (#11).
@@ -1283,7 +1283,7 @@ out those that are not LDAP URLs.
 
 Referral chasing is opt-in (coro-ldap-d8n), in three layers:
 
-- `referral_target(url, request)` (`referral.hpp`, the codec) builds the
+- `referred_request(url, request)` (`referral.hpp`, the codec) builds the
   request that progresses an operation at a referral's target, for a search,
   a compare and each update; it sends nothing. RFC 4511 section 4.1.10: an
   absent DN, scope or filter keeps the original's. An empty DN
@@ -1310,7 +1310,7 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   order). The hop limit defaults to 10, not lower: RFC 4511 requires a
   counting client to handle at least ten nested referrals. Loop detection
   is on (scheme, host in ASCII form, port, DN by distinguishedNameMatch,
-  scope, filter), seeded with the origin's request when its `name()` is a
+  scope, filter), seeded with the origin's request when its `endpoint()` is a
   URL, and checked before the connector is asked (RFC 4511: never contact
   the same server for the same request twice). The request's timeout is
   the budget of the whole chase: the connector's task runs under it
@@ -1320,9 +1320,9 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   the chase keeps its own cost per reference small: the queue holds the
   URIs and a shared pointer to the request that got them (built for a URI
   only when it is tried), once `max_targets` or the budget is spent the
-  references still waiting are counted (`unlisted`) without being parsed,
-  and the attempt list is capped (`max_attempts`). Results: every URI considered gets a
-  `referral_attempt` (followed, skipped_policy, skipped_loop,
+  references still waiting are counted (`unlisted_attempts`) without being parsed,
+  and the attempt list is capped (`max_listed_attempts`). Results: every URI considered gets a
+  `referral_attempt` (followed, refused, skipped_loop,
   limit_reached, unparseable, failed with the error). A continuation
   reference that cannot be followed never fails the search but stays in
   `search_result::references`, so `is_complete()` is false (partial
@@ -1335,7 +1335,7 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   itself): there is nothing partial to return; the error's context counts
   the attempts' outcomes, the list itself is not returned. A cancellation stops the chase. Writes are never chased: a
   referral result means the update was not performed (4.1.10), and
-  re-sending it elsewhere is the caller's decision (`referral_target`
+  re-sending it elsewhere is the caller's decision (`referred_request`
   builds it).
 - `make_same_policy_connector(ioc, origin, options, allowed_hosts, setup)`
   is the connector most callers want: ldapi:// refused (a server must not
@@ -1360,16 +1360,16 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
 The pool's policy, `client_options::referrals` (3pf.1), is built on the
 same pieces: see section 11, "Referrals". A chase returns the types every
 search and compare does: `search_result` carries the report
-(`referrals`, one `referral_attempt` per URI, and `unlisted`; empty
+(`referral_attempts`, one `referral_attempt` per URI, and `unlisted_attempts`; empty
 without a chase), and `is_complete()` (`is_success() &&
 references.empty()`) says whether the entries are all there are, for a
 chase and a plain search alike, so no flag has to be kept in step with
-`references`; `compare_result{value, referrals, unlisted}` is what
+`references`; `compare_result{matched, referral_attempts, unlisted_attempts}` is what
 `client::compare` and `chase_compare` return. One result type means
 `client::search()` reports its chase without a second call (the
 separate `client::chase_search` / `chase_compare` were removed, API
 review #8). `referral_attempt` and `referral_outcome` are in
-`operations.hpp` with `search_result`, `referral_policy` in
+`operations.hpp` with `search_result`, `referral_limits` in
 `referral.hpp` (codec), so that `client.hpp` can name them;
 `referral_chase.hpp` includes `client.hpp` for `session_setup`, so the
 other way round would be circular. A request's `follow_referrals`
@@ -1430,7 +1430,7 @@ while the first page runs). The destructor cannot wait, so the release is
 fire-and-forget, like an AbandonRequest: it is queued and its id joins the
 abandoned requests. Unlike an abandoned request it is always answered, so
 its answer is counted as due: the reader runs until it arrives and drops
-it, and `outstanding()` counts it meanwhile, so `start_tls()` waits for it
+it, and `outstanding_count()` counts it meanwhile, so `start_tls()` waits for it
 (RFC 4513 section 3.1.1: no outstanding responses). An abandoned request
 is not counted, since it may never be answered. A due answer has the
 deadline a page of the same search would have (`search_params::timeout`,
@@ -1481,7 +1481,7 @@ struct person {
     std::chrono::sys_seconds    created;    // GeneralizedTime
 };
 
-template<> constexpr auto ldap::schema<person> = ldap::describe(
+template<> constexpr auto ldap::mapping<person> = ldap::describe(
     ldap::object_class("inetOrgPerson"),          // optional, see below
     ldap::field<&person::uid>("uid"),
     ldap::field<&person::cn>("cn"),
@@ -1505,7 +1505,7 @@ otherwise), declares auxiliary classes (RFC 4512 section 2.4.3), such as
 `posixAccount` on an `inetOrgPerson`:
 
 ```cpp
-template<> constexpr auto ldap::schema<posix_user> = ldap::describe(
+template<> constexpr auto ldap::mapping<posix_user> = ldap::describe(
     ldap::object_class("inetOrgPerson"),
     ldap::auxiliary_class("posixAccount", "shadowAccount"),
     ldap::field<&posix_user::uid>("uid"), ...);
@@ -1751,7 +1751,7 @@ co_await people.remove("jdoe");
 - Naming: `named_by<&T::m>` is a tag carrying the member pointer as a
   template argument, so class template argument deduction gets both the
   struct and the source type (`repository<&person::uid, ldap::client>`) and
-  the naming field is checked at compile time: listed in `schema<T>`,
+  the naming field is checked at compile time: listed in `mapping<T>`,
   required and single-valued (an RDN value), not `read_only` (`add`
   writes it). An entry is `<attribute>=<escaped value>,<base>`;
   `dn_of(key)` builds it, and the `_at(dn)` forms take entries that do
@@ -1945,7 +1945,7 @@ co_await people.remove("jdoe");
   base (the two lists' return types differ, and inherited members change
   `&repository::member`'s type).
 
-**C++26 path:** reflection generates `ldap::schema<T>` from the struct, with
+**C++26 path:** reflection generates `ldap::mapping<T>` from the struct, with
 an annotation to rename (`[[=ldap::name("memberOf")]]`). The descriptor stays
 supported, so user code does not change.
 
@@ -2098,7 +2098,7 @@ Parsing is minimal, only what the checks below need:
   `distinguished_name_match(a, b, schema)` (section 1).
 - `objectClasses`: `NAME`, `SUP`, the kind (`ABSTRACT`, `STRUCTURAL`,
   `AUXILIARY`; STRUCTURAL when none is given, RFC 4512 4.1.1), `MUST` and
-  `MAY` (`object_class_type`, in the RFC's field order). `SUP` is followed
+  `MAY` (`object_class_description`, in the RFC's field order). `SUP` is followed
   to inherit `MUST` (RFC 4512 2.4); entries that are not oids are dropped,
   like NAMEs that are not descriptors.
 - `dITContentRules` (RFC 4512 4.1.6): the OID (the structural class's),
@@ -2786,7 +2786,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap`):
   executor (onto the strand, and back); none when the caller runs on the
   strand. Since run_async dispatches, a writer or reader started on the
   strand runs at once, up to its first suspension.
-  - Accessors (`is_open()`, `outstanding()`, `is_tls()`,
+  - Accessors (`is_open()`, `outstanding_count()`, `is_tls()`,
     `security_layer()`, `bind_count()`, `detail::accepts_requests()`) read
     atomic snapshots that the strand publishes after each change
     (`core::publish()`); `close()` clears the open snapshot at once,
@@ -3169,7 +3169,7 @@ and read through `detail::lease_access`.
 
 - One type, `ldap::client` (the name `naming-connection` reserved), built
   from `client_options{servers, connection, setup, max_connections = 1,
-  idle_check = 60 s, probe_timeout = 5 s, max_lifetime, acquire_timeout =
+  probe_idle_after = 60 s, probe_timeout = 5 s, max_lifetime, acquire_timeout =
   30 s, backoff, failback_after = 5 min, observer, referrals}` on one io_context;
   the pool state runs on a strand of its own and each connection on its
   own (section 7, "Threading"). Connections are
@@ -3326,7 +3326,7 @@ and read through `detail::lease_access`.
 - Health: `acquire()` first retires every connection, leased or not,
   found closed, re-bound (below) or older than `max_lifetime`, and drops
   the retired ones no lease holds; then it probes the idle connection it
-  picked if unused for `idle_check` or longer: a root DSE base search for
+  picked if unused for `probe_idle_after` or longer: a root DSE base search for
   `1.1`, within `probe_timeout` (default 5 s; `no_timeout` for none)
   capped by what is left of `acquire_timeout`. An answer, a server error
   included, passes; a transport failure or timeout retires and replaces
@@ -3513,7 +3513,7 @@ and read through `detail::lease_access`.
   leases to outlive the client (a crash for an easy mistake). `close()`
   from the I/O thread closes at once (it is not blocking there), so an
   observer hook or a coroutine on `executor()` may call it, and
-  `connections()` reads the count at once there. The last owner of the
+  `connection_count()` reads the count at once there. The last owner of the
   core (the client, or the last lease or lease-made transaction) must not
   be destroyed on the I/O thread: it would join itself, and
   `io_thread::join()` terminates with a message on stderr instead of
@@ -3536,11 +3536,11 @@ and read through `detail::lease_access`.
   `connection::search()` returns the ones it does not follow), the done
   fields, where a followed reference's limit code stands in for the
   origin's success so that partial entries are never `is_success()`, and
-  the report (`referrals`, `unlisted`). A reference not followed because
-  `follow_references` is off is counted in `unlisted` and kept in
+  the report (`referral_attempts`, `unlisted_attempts`). A reference not followed because
+  `follow_references` is off is counted in `unlisted_attempts` and kept in
   `references` (so `is_complete()` is false), without an attempt entry
   or a parse.
-  `authorize(referral_hop{target, depth, origin}) -> referral_binding
+  `authorize(referral_hop{target, depth, origin}) -> referral_access
   {refuse, anonymous, same_setup}` decides per URI; empty refuses all.
   It is asked only for URLs that pass the connector's fixed rules (no
   ldapi://, a plausible host), and `same_setup` is the only way the
@@ -3586,11 +3586,11 @@ and read through `detail::lease_access`.
   lease, whose `connection` returns a referral result as is: a referral
   result means the update was not performed (RFC 4511 4.1.10), and
   resending it elsewhere is the caller's decision, with
-  `referral_target(url, add_params ...)` building the request. `search_stream()` and `extended()` never chase: a stream hands its
+  `referred_request(url, add_params ...)` building the request. `search_stream()` and `extended()` never chase: a stream hands its
   references out as they come, and merging chased entries into it would
   change what `next()` means. `client_observer::on_referral(server,
   attempt)` is called for each attempt as it is decided (also beyond
-  `max_attempts`), never for references left unexamined or switched off.
+  `max_listed_attempts`), never for references left unexamined or switched off.
   `sync::client`'s `search()` and `compare()` chase through
   `ldap::client`'s.
 - Later (beads): a background prober, DNS SRV, weighted or round-robin
@@ -3944,7 +3944,7 @@ password method enum was gone.
   large group, or with photos and certificates, can legitimately take
   several MiB); the decoded size is bounded separately by `max_elements`.
 
-- Filters: a typed tree built by operators; only `filter::raw` parses (section 2).
+- Filters: a typed tree built by operators; only `filter::parse` parses (section 2).
 - Descriptors: optional `object_class(...)` (section 4).
 - Schema: minimal parsing (section 6).
 

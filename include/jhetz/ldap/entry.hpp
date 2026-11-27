@@ -71,7 +71,7 @@ struct entry
 	[[nodiscard]] auto find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *;
 	[[nodiscard]] auto find(const attribute &type) const noexcept -> const std::pmr::vector<std::pmr::string> *
 	{
-		return find(type.name());
+		return find(type.text());
 	}
 
 	// dn::parse(dn, mr).

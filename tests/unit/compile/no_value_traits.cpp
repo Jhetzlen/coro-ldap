@@ -6,5 +6,5 @@ struct holder
 {
 	opaque o;
 };
-template<> constexpr auto ldap::schema<holder> = ldap::describe(ldap::field<&holder::o>("o"));
+template<> constexpr auto ldap::mapping<holder> = ldap::describe(ldap::field<&holder::o>("o"));
 auto main() -> int {}

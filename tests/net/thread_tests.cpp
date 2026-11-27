@@ -50,7 +50,7 @@ struct person
 }// namespace
 
 template<>
-constexpr auto ldap::schema<person> =
+constexpr auto ldap::mapping<person> =
   ldap::describe(ldap::object_class("inetOrgPerson"), ldap::field<&person::uid>("uid"));
 
 namespace {
@@ -268,7 +268,7 @@ auto connection_worker(ldap::connection &c, tally &t, int rounds) -> capy::task<
 			.has_value());
 		auto same = co_await c.compare(
 		  { .entry = ldap::dn{ "uid=x,ou=people,dc=example,dc=org" }, .attribute = "uid", .value = "x" });
-		t.check(same && same->value);
+		t.check(same && same->matched);
 		t.check((co_await c.del({ .entry = ldap::dn{ "uid=x,ou=people,dc=example,dc=org" } })).has_value());
 		auto me = co_await ldap::who_am_i(c);
 		t.check(me && *me == "dn:cn=admin,dc=example,dc=org");
@@ -289,7 +289,7 @@ auto connection_worker(ldap::connection &c, tally &t, int rounds) -> capy::task<
 		t.check(p && (co_await p->next()).has_value());
 		// Read on any thread.
 		t.check(c.is_open() && !c.is_tls() && c.security_layer() == ldap::sasl_protection::none);
-		(void)c.outstanding();
+		(void)c.outstanding_count();
 		(void)c.bind_count();
 	}
 }
@@ -384,7 +384,7 @@ auto client_worker(ldap::client &pool, ldap::repository<&person::uid, ldap::clie
 		t.check((co_await pool.add({ .entry = ldap::dn{ "uid=y,ou=people,dc=example,dc=org" } })).has_value());
 		auto same = co_await pool.compare(
 		  { .entry = ldap::dn{ "uid=y,ou=people,dc=example,dc=org" }, .attribute = "uid", .value = "y" });
-		t.check(same && same->value);
+		t.check(same && same->matched);
 		t.check((co_await pool.del({ .entry = ldap::dn{ "uid=y,ou=people,dc=example,dc=org" } })).has_value());
 		t.check((co_await ldap::who_am_i(pool)).has_value());
 		t.check((co_await repo.get("a")).has_value());
@@ -406,7 +406,7 @@ auto client_worker(ldap::client &pool, ldap::repository<&person::uid, ldap::clie
 		}
 		auto s = co_await pool.search_stream(people_search());
 		t.check(s && (co_await s->next()).has_value());
-		(void)pool.connections();
+		(void)pool.connection_count();
 	}
 }
 
@@ -461,7 +461,7 @@ TEST_CASE("threads: one connection used from several threads", "[net][threads]")
 			start(ioc, hanging_search(*c, t), ended);
 		}
 		wait_for([&server] { return server.hanging() == 2 + hung; });
-		CHECK(c->outstanding() == 2 + hung);
+		CHECK(c->outstanding_count() == 2 + hung);
 		*c = ldap::connection{};// off the strand: the close is posted
 		CHECK_FALSE(c->is_open());
 		ended.wait();
@@ -552,7 +552,7 @@ TEST_CASE("threads: one client and one repository used from several threads", "[
 		done.wait();
 		CHECK(t.failed == 0);
 		CHECK(t.ok == (workers * rounds * 10) + (workers * ((rounds + 3) / 4) * 2));
-		CHECK(pool->connections() <= 4 + workers);
+		CHECK(pool->connection_count() <= 4 + workers);
 
 		// The client destroyed while operations of other threads are
 		// outstanding: they fail with not_connected (cond::connection_lost).
@@ -653,7 +653,7 @@ TEST_CASE("threads: close() from another thread reads as closed at once", "[net]
 		constexpr int reads = 2000;
 		int stale = 0;
 		for (int i = 0; i < reads; ++i) {
-			if (c->is_open() || c->outstanding() != 0 || c->is_tls() || ldap::detail::accepts_requests(*c)
+			if (c->is_open() || c->outstanding_count() != 0 || c->is_tls() || ldap::detail::accepts_requests(*c)
 				|| c->security_layer() != ldap::sasl_protection::none) {
 				++stale;
 			}

@@ -180,7 +180,7 @@ TEST_CASE("value semantics: message and controls", "[value_semantics][message]")
 TEST_CASE("value semantics: entry and attribute_values", "[value_semantics][attribute]")
 {
 	const ldap::attribute_values values(ldap::attribute("description"), { long_value, "another long value" });
-	CHECK(values.type.name() == "description");
+	CHECK(values.type.text() == "description");
 	REQUIRE(values.values.size() == 2);
 	CHECK(values.values[1] == "another long value");
 	{
@@ -303,7 +303,7 @@ TEST_CASE("ber::universal builds universal tags at run time", "[value_semantics]
 
 TEST_CASE("filter iterators: postfix increment", "[value_semantics][filter]")
 {
-	const auto f = ldap::filter::raw("(&(a=1)(b=2)(c=3))");
+	const auto f = ldap::filter::parse("(&(a=1)(b=2)(c=3))");
 	REQUIRE(f.has_value());
 	const auto children = f->root().children();
 	auto it = children.begin();
@@ -315,7 +315,7 @@ TEST_CASE("filter iterators: postfix increment", "[value_semantics][filter]")
 	it++;
 	CHECK(it == children.end());
 
-	const auto s = ldap::filter::raw("(cn=init*x*y*fin)");
+	const auto s = ldap::filter::parse("(cn=init*x*y*fin)");
 	REQUIRE(s.has_value());
 	const auto any = s->root().any();
 	auto si = any.begin();
@@ -349,7 +349,7 @@ TEST_CASE("value semantics: ava and attribute", "[value_semantics][dn][attribute
 
 TEST_CASE("value semantics: filter self-move", "[value_semantics][filter]")
 {
-	const auto f = ldap::filter::raw("(&(a=1)(cn=init*x*fin))");
+	const auto f = ldap::filter::parse("(&(a=1)(cn=init*x*fin))");
 	REQUIRE(f.has_value());
 	check_self_move(*f);
 }

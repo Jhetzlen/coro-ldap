@@ -172,11 +172,11 @@ namespace {
 	struct chase_state
 	{
 		referral_connector connector;
-		referral_policy policy;
+		referral_limits policy;
 		std::optional<clock::time_point> deadline;
 		detail::chase_settings settings{};
 		std::vector<referral_attempt> attempts{};
-		// URIs considered beyond policy.max_attempts, or not examined.
+		// URIs considered beyond policy.max_listed_attempts, or not examined.
 		std::size_t unlisted = 0;
 		std::vector<visit_key> visited{};
 		std::size_t targets = 0;
@@ -187,7 +187,7 @@ namespace {
 		  referral_outcome outcome,
 		  std::optional<error> failure = std::nullopt)
 		{
-			const bool listed = attempts.size() < policy.max_attempts;
+			const bool listed = attempts.size() < policy.max_listed_attempts;
 			if (!listed) {
 				++unlisted;
 				if (!settings.on_attempt) {
@@ -278,9 +278,9 @@ namespace {
 		}
 		auto request = [&] {
 			if constexpr (std::is_same_v<Params, search_params>) {
-				return referral_target(*u, base, kind);
+				return referred_request(*u, base, kind);
 			} else {
-				return referral_target(*u, base);
+				return referred_request(*u, base);
 			}
 		}();
 		if (!request) {
@@ -343,7 +343,7 @@ namespace {
 				target = *c;
 			}
 			if (target == nullptr) {
-				st.record(uri, kind, depth, referral_outcome::skipped_policy);
+				st.record(uri, kind, depth, referral_outcome::refused);
 				continue;
 			}
 			// What the connector left of the budget bounds the request.
@@ -395,7 +395,7 @@ namespace {
 	auto start(connection &origin,
 	  const Params &request,
 	  referral_connector &&connector,
-	  referral_policy policy,
+	  referral_limits policy,
 	  detail::chase_settings &&settings) -> chase_state
 	{
 		chase_state st{ .connector = std::move(connector),
@@ -410,7 +410,7 @@ namespace {
 				st.settings.references = *request.follow_references;
 			}
 		}
-		if (auto u = url::parse(origin.name())) {
+		if (auto u = url::parse(origin.endpoint())) {
 			st.visited.push_back(request_key(*u, request));
 		}
 		return st;
@@ -421,8 +421,8 @@ namespace {
 		switch (o) {
 		case referral_outcome::followed:
 			return "followed";
-		case referral_outcome::skipped_policy:
-			return "skipped_policy";
+		case referral_outcome::refused:
+			return "refused";
 		case referral_outcome::skipped_loop:
 			return "skipped_loop";
 		case referral_outcome::limit_reached:
@@ -443,7 +443,7 @@ namespace {
 			return e;
 		}
 		constexpr std::array all{ referral_outcome::followed,
-			referral_outcome::skipped_policy,
+			referral_outcome::refused,
 			referral_outcome::skipped_loop,
 			referral_outcome::limit_reached,
 			referral_outcome::unparseable,
@@ -562,7 +562,7 @@ namespace detail {
 	auto chase_search(connection &origin,
 	  search_params request,
 	  referral_connector connector,
-	  referral_policy policy,
+	  referral_limits policy,
 	  std::pmr::memory_resource *mr,
 	  chase_settings settings) -> capy::task<chase_result<search_result>>
 	{
@@ -605,15 +605,15 @@ namespace detail {
 				refs.unfollowed(ref.uris);
 			}
 		}
-		out.referrals = std::move(st.attempts);
-		out.unlisted = st.unlisted;
+		out.referral_attempts = std::move(st.attempts);
+		out.unlisted_attempts = st.unlisted;
 		co_return { .value = std::move(out) };
 	}
 
 	auto chase_compare(connection &origin,
 	  compare_params request,
 	  referral_connector connector,
-	  referral_policy policy,
+	  referral_limits policy,
 	  chase_settings settings) -> capy::task<chase_result<compare_result>>
 	{
 		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
@@ -624,8 +624,8 @@ namespace detail {
 				.origin_failed = first.origin_failed };
 		}
 		compare_result out = std::move(first.value->value);
-		out.referrals = std::move(st.attempts);
-		out.unlisted = st.unlisted;
+		out.referral_attempts = std::move(st.attempts);
+		out.unlisted_attempts = st.unlisted;
 		co_return { .value = std::move(out) };
 	}
 
@@ -634,14 +634,14 @@ namespace detail {
 auto chase_search(connection &origin,
   search_params request,
   referral_connector connector,
-  referral_policy policy,
+  referral_limits policy,
   std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 {
 	auto r = co_await detail::chase_search(origin, std::move(request), std::move(connector), policy, mr, {});
 	co_return std::move(r.value);
 }
 
-auto chase_compare(connection &origin, compare_params request, referral_connector connector, referral_policy policy)
+auto chase_compare(connection &origin, compare_params request, referral_connector connector, referral_limits policy)
   -> capy::task<result<compare_result>>
 {
 	auto r = co_await detail::chase_compare(origin, std::move(request), std::move(connector), policy, {});

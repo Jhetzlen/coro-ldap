@@ -183,10 +183,10 @@ class transaction
 	[[nodiscard]] auto identifier() const -> std::string;
 	[[nodiscard]] auto is_open() const -> bool;
 
-	[[nodiscard]] auto add(add_params request) -> result<response>;
-	[[nodiscard]] auto modify(modify_params request) -> result<response>;
-	[[nodiscard]] auto del(del_params request) -> result<response>;
-	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>;
+	[[nodiscard]] auto add(add_params request) -> result<update_result>;
+	[[nodiscard]] auto modify(modify_params request) -> result<update_result>;
+	[[nodiscard]] auto del(del_params request) -> result<update_result>;
+	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<update_result>;
 	[[nodiscard]] auto commit() -> result<commit_result>;
 	[[nodiscard]] auto abort() -> result<void>;
 
@@ -275,16 +275,16 @@ namespace detail {
 			  .value_or(false);
 		}
 		// Copied; empty if never connected.
-		[[nodiscard]] auto name() const -> std::string
+		[[nodiscard]] auto endpoint() const -> std::string
 		{
 			return self()
-			  .call([](const ldap::connection &c) { return invoked([&c] { return std::string(c.name()); }); })
+			  .call([](const ldap::connection &c) { return invoked([&c] { return std::string(c.endpoint()); }); })
 			  .value_or(std::string{});
 		}
-		[[nodiscard]] auto outstanding() const -> std::size_t
+		[[nodiscard]] auto outstanding_count() const -> std::size_t
 		{
 			return self()
-			  .call([](const ldap::connection &c) { return invoked([&c] { return c.outstanding(); }); })
+			  .call([](const ldap::connection &c) { return invoked([&c] { return c.outstanding_count(); }); })
 			  .value_or(0);
 		}
 		[[nodiscard]] auto bind_count() const -> std::uint64_t
@@ -371,19 +371,19 @@ namespace detail {
 			}
 			return sync::search_stream(self().runner(), std::move(*s));
 		}
-		[[nodiscard]] auto add(add_params request) -> result<response>
+		[[nodiscard]] auto add(add_params request) -> result<update_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.add(std::move(request)); });
 		}
-		[[nodiscard]] auto modify(modify_params request) -> result<response>
+		[[nodiscard]] auto modify(modify_params request) -> result<update_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.modify(std::move(request)); });
 		}
-		[[nodiscard]] auto del(del_params request) -> result<response>
+		[[nodiscard]] auto del(del_params request) -> result<update_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.del(std::move(request)); });
 		}
-		[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>
+		[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<update_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.modify_dn(std::move(request)); });
 		}
@@ -583,13 +583,13 @@ class client
 	[[nodiscard]] auto compare(compare_params request) -> result<compare_result>;
 
 	// Write forwarders, as ldap::client's.
-	[[nodiscard]] auto add(add_params request) -> result<response>;
-	[[nodiscard]] auto modify(modify_params request) -> result<response>;
-	[[nodiscard]] auto del(del_params request) -> result<response>;
-	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>;
+	[[nodiscard]] auto add(add_params request) -> result<update_result>;
+	[[nodiscard]] auto modify(modify_params request) -> result<update_result>;
+	[[nodiscard]] auto del(del_params request) -> result<update_result>;
+	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<update_result>;
 	[[nodiscard]] auto extended(extended_params request) -> result<extended_result>;
 
-	[[nodiscard]] auto connections() const -> std::size_t;
+	[[nodiscard]] auto connection_count() const -> std::size_t;
 
 	// As ldap::client::close(), and waits for it. Idempotent.
 	void close() noexcept;

@@ -116,7 +116,7 @@ void connection::core::publish() noexcept
 	if (!open) {
 		open_snapshot.store(false, std::memory_order_release);
 	}
-	outstanding_snapshot.store(outstanding(), std::memory_order_relaxed);
+	outstanding_snapshot.store(outstanding_count(), std::memory_order_relaxed);
 	binds_snapshot.store(binds_begun, std::memory_order_relaxed);
 	layer_snapshot.store(security_layer(), std::memory_order_release);
 	tls_snapshot.store(is_tls(), std::memory_order_release);
@@ -612,7 +612,7 @@ auto connection::core::due_watcher(core *self) -> capy::task<void>
 	self->watching = false;
 }
 
-auto connection::core::outstanding() const noexcept -> std::size_t { return pending.size() + due_answers; }
+auto connection::core::outstanding_count() const noexcept -> std::size_t { return pending.size() + due_answers; }
 
 auto connection::core::wait_due_answers(std::optional<clock::time_point> deadline)
   -> capy::task<connection::core::due_wait>
@@ -763,7 +763,7 @@ void connection::core::start_reader()
 
 void connection::core::stop_reader_if_idle()
 {
-	if (outstanding() == 0 && reading) {
+	if (outstanding_count() == 0 && reading) {
 		reader_stop.request_stop();
 	}
 }
@@ -772,7 +772,7 @@ auto connection::core::reader(core *self) -> capy::task<void>
 {
 	const frame_ref ref(self);
 	try {
-		while (self->open && self->outstanding() != 0) {
+		while (self->open && self->outstanding_count() != 0) {
 			auto size = co_await net::read_frame(self->transport_, self->buf, self->max_message_size);
 			if (!size) {
 				// Stopped because nothing is outstanding (received bytes stay in buf), or
@@ -792,7 +792,7 @@ auto connection::core::reader(core *self) -> capy::task<void>
 	self->reader_idle.set();
 	// Stopped while an operation was being registered: start afresh.
 	try {
-		if (self->open && self->outstanding() != 0) {
+		if (self->open && self->outstanding_count() != 0) {
 			self->start_reader();
 		}
 	} catch (const std::bad_alloc &) {
@@ -802,7 +802,7 @@ auto connection::core::reader(core *self) -> capy::task<void>
 
 auto connection::core::unexpected(std::string_view text) -> error
 {
-	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport_.name(), text));
+	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport_.endpoint(), text));
 }
 
 void connection::core::route(std::size_t size)
@@ -811,7 +811,7 @@ void connection::core::route(std::size_t size)
 	auto h = peek_message_header(bytes);
 	if (!h) {
 		buf.consume(size);
-		shut(detail::with_context(std::move(h.error()), detail::format("read {}", transport_.name())), true);
+		shut(detail::with_context(std::move(h.error()), detail::format("read {}", transport_.endpoint())), true);
 		return;
 	}
 	if (h->id == 0) {
@@ -828,7 +828,7 @@ void connection::core::route(std::size_t size)
 		auto m = decode(bytes, { .max_elements = max_elements, .memory = p.mr });
 		buf.consume(size);
 		if (!m) {
-			shut(detail::with_context(std::move(m.error()), detail::format("read {}", transport_.name())), true);
+			shut(detail::with_context(std::move(m.error()), detail::format("read {}", transport_.endpoint())), true);
 			return;
 		}
 		const std::size_t index = m->op.index();
@@ -904,7 +904,7 @@ auto connection::core::take_armed_layer(const message &m) -> bool
 		return true;
 	}
 	if (auto r = net::detail::install_security_layer(transport_, buf, std::move(layer)); !r) {
-		shut(detail::with_context(std::move(r.error()), detail::format("read {}", transport_.name())), true);
+		shut(detail::with_context(std::move(r.error()), detail::format("read {}", transport_.endpoint())), true);
 		return false;
 	}
 	publish();
@@ -917,7 +917,7 @@ void connection::core::notification(std::span<const std::byte> bytes)
 	{
 		auto m = decode(bytes, { .max_elements = max_elements, .memory = &scratch });
 		if (!m) {
-			fatal = detail::with_context(std::move(m.error()), detail::format("read {}", transport_.name()));
+			fatal = detail::with_context(std::move(m.error()), detail::format("read {}", transport_.endpoint()));
 		} else if (const auto *x = std::get_if<extended_response>(&m->op); x == nullptr) {
 			fatal = unexpected(std::string(op_name(m->op)) + " with message id 0");
 		} else if (x->response_name && *x->response_name == notice_of_disconnection_oid) {

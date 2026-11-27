@@ -71,7 +71,7 @@ auto search_message(ldap::filter f, std::int32_t id = 1) -> ldap::message
 	return search_message([&](ldap::search_request &s) { s.filter = std::move(f); }, id);
 }
 
-auto raw(std::string_view text) -> ldap::filter { return ldap::filter::raw(text).value(); }
+auto raw(std::string_view text) -> ldap::filter { return ldap::filter::parse(text).value(); }
 
 void write_result(ber::writer &o, std::int64_t code = 0)
 {
@@ -408,7 +408,7 @@ TEST_CASE("a search request with the deepest allowed filter decodes", "[message]
 	CHECK(round_trip(m) == m);
 
 	// One more level: rejected by raw(), and by encode() when built.
-	CHECK(code_of(ldap::filter::raw("(!" + text + ")")) == client_errc::invalid_filter);
+	CHECK(code_of(ldap::filter::parse("(!" + text + ")")) == client_errc::invalid_filter);
 	const auto deeper = search_message(!raw(text));
 	CHECK(std::get<ldap::search_request>(deeper.op).filter.depth() == ldap::max_filter_depth + 1);
 	auto r = ldap::encode(deeper);
@@ -436,7 +436,7 @@ TEST_CASE("encode rejects values the wire format cannot carry", "[message]")
 	  encode_error({ 1, ldap::modify_request{ "", { { static_cast<ldap::modify_operation>(4), { "cn", {} } } } } }));
 
 	// Malformed filter text fails where it is parsed, not when encoding.
-	auto bad_text = ldap::filter::raw("(cn=x");
+	auto bad_text = ldap::filter::parse("(cn=x");
 	CHECK(code_of(bad_text) == client_errc::invalid_filter);
 	CHECK(bad_text.error().context == "filter: unexpected end of filter at position 5");
 	// The only filter encode() rejects besides over-limit ones: an empty one.
@@ -940,7 +940,7 @@ TEST_CASE("End Transaction request value (RFC 5805 section 2.3)", "[message][tra
 	CHECK(decoded("30 03 01 01 00").error().context.starts_with("txnEndReq: "));
 }
 
-TEST_CASE("End Transaction response value (RFC 5805 section 2.3)", "[message][transaction]")
+TEST_CASE("End Transaction update_result value (RFC 5805 section 2.3)", "[message][transaction]")
 {
 	const auto hex_of = [](const ldap::result<std::optional<std::pmr::string>> &s) {
 		REQUIRE(s.has_value());

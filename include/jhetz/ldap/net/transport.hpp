@@ -74,7 +74,7 @@ class transport
 	[[nodiscard]] auto is_tls() const noexcept -> bool;
 	[[nodiscard]] auto is_open() const noexcept -> bool;
 	// "ldap://127.0.0.1:389", "ldapi://%2Frun%2Fldapi", or wrap()'s name.
-	[[nodiscard]] auto name() const noexcept -> const std::pmr::string &;
+	[[nodiscard]] auto endpoint() const noexcept -> const std::pmr::string &;
 	// The URL's host (the socket path for ldapi://); empty for wrap()ped streams.
 	[[nodiscard]] auto host() const noexcept -> const std::pmr::string &;
 

@@ -105,55 +105,55 @@ struct large_group
 }// namespace
 
 template<>
-constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrgPerson"),
+constexpr auto ldap::mapping<person> = ldap::describe(ldap::object_class("inetOrgPerson"),
   ldap::field<&person::uid>("uid"),
   ldap::field<&person::mail>("mail"),
   ldap::field<&person::uid_number>("uidNumber"),
   ldap::field<&person::modified>("modifyTimestamp", ldap::read_only));
 
 template<>
-constexpr auto ldap::schema<badly_typed> =
+constexpr auto ldap::mapping<badly_typed> =
   ldap::describe(ldap::object_class("inetOrgPerson"), ldap::field<&badly_typed::uid>("uid"));
 
 template<>
-constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+constexpr auto ldap::mapping<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
 
 template<>
-constexpr auto ldap::schema<posix_card> = ldap::describe(ldap::object_class("person"),
+constexpr auto ldap::mapping<posix_card> = ldap::describe(ldap::object_class("person"),
   ldap::auxiliary_class("posixAccount"),
   ldap::field<&posix_card::cn>("cn"),
   ldap::field<&posix_card::uid_number>("uidNumber"));
 
 template<>
-constexpr auto ldap::schema<labelled_card> = ldap::describe(ldap::object_class("person"),
+constexpr auto ldap::mapping<labelled_card> = ldap::describe(ldap::object_class("person"),
   ldap::field<&labelled_card::cn>("cn"),
   ldap::field<&labelled_card::description>("description"));
 
 template<>
-constexpr auto ldap::schema<surnamed> = ldap::describe(ldap::object_class("person"),
+constexpr auto ldap::mapping<surnamed> = ldap::describe(ldap::object_class("person"),
   ldap::field<&surnamed::cn>("cn"),
   ldap::field<&surnamed::surname>("surname"));
 
 template<>
-constexpr auto ldap::schema<certified_card> = ldap::describe(ldap::field<&certified_card::cn>("cn"),
+constexpr auto ldap::mapping<certified_card> = ldap::describe(ldap::field<&certified_card::cn>("cn"),
   ldap::field<&certified_card::english_cn>("cn;lang-en"),
   ldap::field<&certified_card::certificates>("userCertificate;binary"));
 
 template<>
-constexpr auto ldap::schema<english_certified> = ldap::describe(ldap::field<&english_certified::cn>("cn"),
+constexpr auto ldap::mapping<english_certified> = ldap::describe(ldap::field<&english_certified::cn>("cn"),
   ldap::field<&english_certified::certificates>("userCertificate;lang-en;binary"));
 
 template<>
-constexpr auto ldap::schema<photo_card> = ldap::describe(ldap::field<&photo_card::cn>("cn"),
+constexpr auto ldap::mapping<photo_card> = ldap::describe(ldap::field<&photo_card::cn>("cn"),
   ldap::field<&photo_card::photo>("jpegPhoto"),
   ldap::field<&photo_card::csn>("entryCSN", ldap::read_only));
 
 template<>
-constexpr auto ldap::schema<badly_typed_photo> =
+constexpr auto ldap::mapping<badly_typed_photo> =
   ldap::describe(ldap::field<&badly_typed_photo::cn>("cn"), ldap::field<&badly_typed_photo::photo>("jpegPhoto"));
 
 template<>
-constexpr auto ldap::schema<large_group> = ldap::describe(ldap::object_class("groupOfNames"),
+constexpr auto ldap::mapping<large_group> = ldap::describe(ldap::object_class("groupOfNames"),
   ldap::field<&large_group::cn>("cn"),
   ldap::field<&large_group::members>("member"),
   ldap::field<&large_group::csn>("entryCSN", ldap::read_only));
@@ -876,12 +876,21 @@ struct canned_search
 	ldap::search_result found{};
 
 	auto search(ldap::search_params) -> capy::task<ldap::result<ldap::search_result>> { co_return found; }
-	static auto add(ldap::add_params) -> capy::task<ldap::result<ldap::response>> { co_return ldap::response{}; }
-	static auto modify(ldap::modify_params) -> capy::task<ldap::result<ldap::response>> { co_return ldap::response{}; }
-	static auto del(ldap::del_params) -> capy::task<ldap::result<ldap::response>> { co_return ldap::response{}; }
-	static auto modify_dn(ldap::modify_dn_params) -> capy::task<ldap::result<ldap::response>>
+	static auto add(ldap::add_params) -> capy::task<ldap::result<ldap::update_result>>
 	{
-		co_return ldap::response{};
+		co_return ldap::update_result{};
+	}
+	static auto modify(ldap::modify_params) -> capy::task<ldap::result<ldap::update_result>>
+	{
+		co_return ldap::update_result{};
+	}
+	static auto del(ldap::del_params) -> capy::task<ldap::result<ldap::update_result>>
+	{
+		co_return ldap::update_result{};
+	}
+	static auto modify_dn(ldap::modify_dn_params) -> capy::task<ldap::result<ldap::update_result>>
+	{
+		co_return ldap::update_result{};
 	}
 	static auto compare(ldap::compare_params) -> capy::task<ldap::result<ldap::compare_result>>
 	{
@@ -895,20 +904,20 @@ TEST_CASE("repository: search keeps the referral chase's attempts", "[net][repos
 {
 	canned_search d;
 	d.found.references = { "ldap://c.example.org/ou=people,dc=example,dc=org" };
-	d.found.referrals = { ldap::referral_attempt{ .uri = "ldap://b.example.org/ou=people,dc=example,dc=org",
+	d.found.referral_attempts = { ldap::referral_attempt{ .uri = "ldap://b.example.org/ou=people,dc=example,dc=org",
 	  .kind = ldap::reference_kind::continuation_reference,
 	  .depth = 1,
-	  .outcome = ldap::referral_outcome::skipped_policy,
+	  .outcome = ldap::referral_outcome::refused,
 	  .failure = std::nullopt } };
-	d.found.unlisted = 3;
+	d.found.unlisted_attempts = 3;
 	ldap::repository s(d, people_base, ldap::named_by<&person::uid>);
 
 	corosio::io_context ioc;
 	auto r = run_task(ioc, s.search());
 	REQUIRE(r.has_value());
 	CHECK(r->references == d.found.references);
-	CHECK(r->referrals == d.found.referrals);
-	CHECK(r->unlisted == 3);
+	CHECK(r->referral_attempts == d.found.referral_attempts);
+	CHECK(r->unlisted_attempts == 3);
 }
 
 TEST_CASE("repository: search quotes its base sanitized", "[net][repository]")
@@ -1022,7 +1031,7 @@ TEST_CASE("repository: search_paged_stream decodes the entries of every page", "
 	auto end = m.run(pages->next());// the last page ended with sizeLimitExceeded
 	REQUIRE_FALSE(end.has_value());
 	CHECK(end.error().code == ldap::errc::size_limit_exceeded);
-	CHECK(pages->stream().pages() == 2);
+	CHECK(pages->stream().page_count() == 2);
 	m.check_server();
 
 	REQUIRE(m.log.received.size() == 2);
@@ -1192,10 +1201,10 @@ TEST_CASE("sync repository: the same operations, blocking", "[net][repository][s
 	static_assert(std::same_as<decltype(s.get("X")), ldap::result<std::optional<card>>>);
 	static_assert(!has_streams<decltype(s)>);
 	static_assert(has_streams<ldap::repository<&card::cn, ldap::connection>>);
-	static_assert(std::same_as<ldap::repository<&card::cn, ldap::connection>::returns<ldap::response>,
-	  boost::capy::task<ldap::result<ldap::response>>>);
-	static_assert(std::same_as<ldap::repository<&card::cn, ldap::sync::client>::returns<ldap::response>,
-	  ldap::result<ldap::response>>);
+	static_assert(std::same_as<ldap::repository<&card::cn, ldap::connection>::returns<ldap::update_result>,
+	  boost::capy::task<ldap::result<ldap::update_result>>>);
+	static_assert(std::same_as<ldap::repository<&card::cn, ldap::sync::client>::returns<ldap::update_result>,
+	  ldap::result<ldap::update_result>>);
 
 	auto all = s.search();
 	REQUIRE(all.has_value());

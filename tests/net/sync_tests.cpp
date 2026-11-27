@@ -101,8 +101,8 @@ TEST_CASE("sync: connect, bind and search as one chain", "[net][sync][bind]")
 TEST_CASE("sync: name, outstanding, bind_count and channel_bindings", "[net][sync]")
 {
 	ldap::sync::connection none;
-	CHECK(none.name().empty());
-	CHECK(none.outstanding() == 0);
+	CHECK(none.endpoint().empty());
+	CHECK(none.outstanding_count() == 0);
 	CHECK(none.bind_count() == 0);
 	CHECK(none.channel_bindings().default_type == std::nullopt);
 	CHECK(none.search_stream({ .base = ldap::dn{} }).error().code == ldap::client_errc::not_connected);
@@ -111,11 +111,11 @@ TEST_CASE("sync: name, outstanding, bind_count and channel_bindings", "[net][syn
 	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
-	CHECK(c.name().starts_with("ldap://127.0.0.1:"));
+	CHECK(c.endpoint().starts_with("ldap://127.0.0.1:"));
 	CHECK(c.bind_count() == 0);
 	CHECK(c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret").has_value());
 	CHECK(c.bind_count() == 1);
-	CHECK(c.outstanding() == 0);
+	CHECK(c.outstanding_count() == 0);
 	const auto cb = c.channel_bindings();// no TLS
 	CHECK(cb.tls_server_end_point.empty());
 	CHECK(cb.get(ldap::channel_binding_type::tls_exporter).empty());
@@ -287,7 +287,7 @@ TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it re
 		CHECK(paged->entries.size() == 2);
 	}
 	CHECK(arena->allocations() > 0);
-	CHECK(arena->outstanding() == 0);
+	CHECK(arena->outstanding_count() == 0);
 	arena.reset();
 	CHECK(c.search({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }).has_value());
 }
@@ -683,10 +683,10 @@ TEST_CASE("sync: compare", "[net][sync]")
 	connected k(srv);
 	auto yes = k.c.compare({ .entry = jdoe, .attribute = "mail", .value = "jdoe@example.org" });
 	REQUIRE(yes.has_value());
-	CHECK(yes->value);
+	CHECK(yes->matched);
 	auto no = k.c.compare({ .entry = jdoe, .attribute = "cn", .value = "Jöhn" });
 	REQUIRE(no.has_value());
-	CHECK_FALSE(no->value);
+	CHECK_FALSE(no->matched);
 	auto missing = k.c.compare({ .entry = jdoe, .attribute = "pager", .value = "1" });
 	REQUIRE_FALSE(missing.has_value());
 	CHECK(missing.error().code == ldap::errc::no_such_attribute);

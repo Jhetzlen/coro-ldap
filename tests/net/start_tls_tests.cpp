@@ -697,8 +697,8 @@ TEST_CASE("RFC 4511 4.14.1: unbind while StartTLS waits for its response closes 
 	auto c = f.connect();
 	outcome<ldap::result<ldap::connection>> upgrade;
 	spawn(f.ioc, c.start_tls(trusting().tls), upgrade);
-	drive_until(f.ioc, [&c] { return c.outstanding() == 1; });// the StartTLS request is sent
-	REQUIRE(c.outstanding() == 1);
+	drive_until(f.ioc, [&c] { return c.outstanding_count() == 1; });// the StartTLS request is sent
+	REQUIRE(c.outstanding_count() == 1);
 	auto u = finish(f.ioc, c.unbind());
 	CHECK(u.has_value());
 	CHECK_FALSE(c.is_open());
@@ -706,7 +706,7 @@ TEST_CASE("RFC 4511 4.14.1: unbind while StartTLS waits for its response closes 
 	REQUIRE_FALSE(upgrade.get().has_value());
 	CHECK(upgrade.get().error().code == ldap::client_errc::not_connected);
 	CHECK(upgrade.get().error().context == "start tls: connection closed");
-	CHECK(c.outstanding() == 0);
+	CHECK(c.outstanding_count() == 0);
 	const auto &got = server.get();
 	REQUIRE(got.size() == 1);// the StartTLS request, then the connection closed: no UnbindRequest
 	CHECK(std::holds_alternative<ldap::extended_request>(got[0].op));
@@ -741,7 +741,7 @@ struct tls_account
 }// namespace
 
 template<>
-constexpr auto ldap::schema<tls_account> =
+constexpr auto ldap::mapping<tls_account> =
   ldap::describe(ldap::object_class("inetOrgPerson"), ldap::field<&tls_account::uid>("uid"));
 
 namespace {

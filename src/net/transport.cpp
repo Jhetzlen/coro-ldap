@@ -101,7 +101,7 @@ auto transport::is_open() const noexcept -> bool
 	return false;
 }
 
-auto transport::name() const noexcept -> const std::pmr::string &
+auto transport::endpoint() const noexcept -> const std::pmr::string &
 {
 	static const std::pmr::string none("no transport", std::pmr::new_delete_resource());
 	return layers_ ? layers_->name : none;

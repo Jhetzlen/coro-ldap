@@ -263,7 +263,7 @@ class connection::core
 	void disarm_security_layer() noexcept { armed_layer.reset(); }
 
 	// Requests still to be answered: those waited for, and `due` answers.
-	auto outstanding() const noexcept -> std::size_t;
+	auto outstanding_count() const noexcept -> std::size_t;
 
 	// Bind exchanges begun (connection::bind_count()).
 	auto bind_count() const noexcept -> std::uint64_t { return binds_begun; }
@@ -671,11 +671,12 @@ namespace detail {
 
 	// The update operations once the connection is known (core_ != nullptr);
 	// `context` names the operation in errors.
-	auto add_impl(core_ref self, add_params request, std::string context) -> boost::capy::task<result<response>>;
-	auto modify_impl(core_ref self, modify_params request, std::string context) -> boost::capy::task<result<response>>;
-	auto del_impl(core_ref self, del_params request, std::string context) -> boost::capy::task<result<response>>;
+	auto add_impl(core_ref self, add_params request, std::string context) -> boost::capy::task<result<update_result>>;
+	auto modify_impl(core_ref self, modify_params request, std::string context)
+	  -> boost::capy::task<result<update_result>>;
+	auto del_impl(core_ref self, del_params request, std::string context) -> boost::capy::task<result<update_result>>;
 	auto modify_dn_impl(core_ref self, modify_dn_params request, std::string context)
-	  -> boost::capy::task<result<response>>;
+	  -> boost::capy::task<result<update_result>>;
 
 	auto extended_impl(core_ref self, extended_params request) -> boost::capy::task<result<extended_result>>;
 

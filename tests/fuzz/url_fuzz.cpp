@@ -1,5 +1,5 @@
 // libFuzzer target for RFC 4516 URL parsing: URLs round-trip canonically,
-// printed fully encoded, and referral_target agrees.
+// printed fully encoded, and referred_request agrees.
 #include "jhetz/ldap/referral.hpp"
 #include "jhetz/ldap/url.hpp"
 
@@ -55,7 +55,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 
 	const bool has_dn = u->base_dn() && !u->base_dn()->empty();
 	for (const auto kind : { ldap::reference_kind::referral, ldap::reference_kind::continuation_reference }) {
-		const auto t = ldap::referral_target(*u, ldap::search_params{ .base = ldap::dn{} }, kind);
+		const auto t = ldap::referred_request(*u, ldap::search_params{ .base = ldap::dn{} }, kind);
 		const bool refused =
 		  u->has_critical_extension() || (kind == ldap::reference_kind::continuation_reference && !has_dn);
 		check(t.has_value() != refused, "t.has_value() != refused");

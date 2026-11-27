@@ -277,7 +277,14 @@ class attribute
 		return attribute(std::move(text), adopt{});
 	}
 
-	[[nodiscard]] auto name() const noexcept -> const std::pmr::string & { return name_; }
+	// The whole description as given: "cn;lang-de".
+	[[nodiscard]] auto text() const noexcept -> const std::pmr::string & { return name_; }
+	// The attribute type, without options: "cn" for "cn;lang-de", as spelled.
+	[[nodiscard]] auto name() const noexcept -> std::string_view
+	{
+		const std::string_view t = name_;
+		return t.substr(0, t.find(';'));
+	}
 	[[nodiscard]] auto empty() const noexcept -> bool { return name_.empty(); }
 
 	friend auto operator==(const attribute &a, const attribute &b) noexcept -> bool
@@ -329,6 +336,6 @@ template<> struct std::hash<jhetz::ldap::attribute>
 {
 	auto operator()(const jhetz::ldap::attribute &a) const noexcept -> std::size_t
 	{
-		return jhetz::ldap::hash_value(a.name());
+		return jhetz::ldap::hash_value(a.text());
 	}
 };

@@ -57,7 +57,7 @@ TEST_CASE("RFC 4514 section 4 examples", "[dn]")
 	{
 		const auto d = parse("UID=jsmith,DC=example,DC=net");
 		REQUIRE(d.rdns().size() == 3);
-		CHECK(d.rdns()[0].avas[0].type.name() == "UID");
+		CHECK(d.rdns()[0].avas[0].type.text() == "UID");
 		CHECK(d.rdns()[0].avas[0].value == "jsmith");
 		CHECK(d.to_string() == "UID=jsmith,DC=example,DC=net");
 	}

@@ -23,10 +23,10 @@ struct chase_settings
 {
 	bool referrals = true;// referral results (RFC 4511 section 4.1.10)
 	// Continuation references (section 4.5.3). Off: their URIs are counted
-	// in search_result::unlisted, and kept in its references.
+	// in search_result::unlisted_attempts, and kept in its references.
 	bool references = true;
 	// Called with each attempt as it is decided (also those beyond
-	// max_attempts, which are not listed).
+	// max_listed_attempts, which are not listed).
 	std::function<void(const referral_attempt &)> on_attempt{};
 };
 
@@ -41,14 +41,14 @@ template<class T> struct chase_result
 auto chase_search(connection &origin,
   search_params request,
   referral_connector connector,
-  referral_policy policy,
+  referral_limits policy,
   std::pmr::memory_resource *mr,
   chase_settings settings) -> boost::capy::task<chase_result<search_result>>;
 
 auto chase_compare(connection &origin,
   compare_params request,
   referral_connector connector,
-  referral_policy policy,
+  referral_limits policy,
   chase_settings settings) -> boost::capy::task<chase_result<compare_result>>;
 
 // How a policy connector connects to a server.
@@ -77,7 +77,7 @@ struct referral_identity
 
 // How referral_options::authorize's answer binds a referred connection;
 // nullopt for refuse.
-[[nodiscard]] auto client_referral_identity(referral_binding binding, const session_setup &client_setup)
+[[nodiscard]] auto client_referral_identity(referral_access binding, const session_setup &client_setup)
   -> std::optional<referral_identity>;
 
 // TLS, ldapi://, or a SASL confidentiality layer.

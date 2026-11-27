@@ -324,7 +324,7 @@ namespace filters {
 	using kind = filter::kind;
 
 	attr::attr(const attribute &name, const allocator_type &alloc)
-	  : name_(name.name(), alloc), valid_(detail::is_attribute_description(name_))
+	  : name_(name.text(), alloc), valid_(detail::is_attribute_description(name_))
 	{}
 
 	namespace {
@@ -863,9 +863,12 @@ namespace {
 
 }// namespace
 
-auto filter::raw(std::string_view text, std::pmr::memory_resource *mr) -> result<filter> { return raw(text, {}, mr); }
+auto filter::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<filter>
+{
+	return parse(text, {}, mr);
+}
 
-auto filter::raw(std::string_view text, const filter_limits &limits, std::pmr::memory_resource *mr) -> result<filter>
+auto filter::parse(std::string_view text, const filter_limits &limits, std::pmr::memory_resource *mr) -> result<filter>
 {
 	filter out{ allocator_type(mr) };
 	if (!text.empty() && text.front() == '(') {

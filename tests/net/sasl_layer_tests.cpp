@@ -747,7 +747,7 @@ struct card
 }// namespace
 
 template<>
-constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+constexpr auto ldap::mapping<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
 
 namespace {
 

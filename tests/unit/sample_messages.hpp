@@ -19,7 +19,7 @@ inline auto sample_result() -> ldap_result
 	return { 32, "dc=example,dc=org", "no such entry", { "ldap://a.example.org/", "ldap://b.example.org/" } };
 }
 
-inline auto raw_filter(std::string_view text) -> filter { return filter::raw(text).value(); }
+inline auto raw_filter(std::string_view text) -> filter { return filter::parse(text).value(); }
 
 // A syncUUID of distinct octets.
 inline auto sample_uuid() -> sync_uuid

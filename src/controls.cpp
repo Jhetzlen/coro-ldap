@@ -253,7 +253,7 @@ auto parse_values_return_filter(std::string_view text, std::pmr::memory_resource
 	// errors refer to the whole text.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local, two callers
 	const auto item = [&](std::string_view t, std::size_t index, std::size_t at) -> result<filter> {
-		auto f = filter::raw(t, mr);
+		auto f = filter::parse(t, mr);
 		if (!f) {
 			shift_position(f.error().context, at);
 			f.error().context.insert(0, detail::format("{}: item {}: ", matched_values_name, index + 1));
