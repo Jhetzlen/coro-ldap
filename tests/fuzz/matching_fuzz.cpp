@@ -19,11 +19,11 @@ using ldap::match_result;
 namespace {
 
 // distinguishedNameMatch for every type: each AVA value is compared as a DN.
-auto dn_everywhere(const ldap::attribute &) -> std::string_view { return "distinguishedNameMatch"; }
+auto dn_everywhere(const ldap::attribute_description &) -> std::string_view { return "distinguishedNameMatch"; }
 
 // A rule per type NAME, different for names of one type (cn, commonName,
 // 2.5.4.3; uid, userid): distinguishedNameMatch stays symmetric.
-auto by_spelling(const ldap::attribute &t) -> std::string_view
+auto by_spelling(const ldap::attribute_description &t) -> std::string_view
 {
 	const std::string_view name = t.text();
 	if (name == "cn" || name == "uid") {

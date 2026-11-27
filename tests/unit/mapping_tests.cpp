@@ -431,10 +431,10 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 		DYNAMIC_SECTION(c.name)
 		{
 			ldap::entry e = full_entry();
-			const ldap::attribute type = ldap::attribute::parse(c.attribute).value();
-			std::erase_if(e.attributes, [&](const ldap::attribute_values &a) { return a.type == type; });
+			const ldap::attribute_description type = ldap::attribute_description::parse(c.attribute).value();
+			std::erase_if(e.attributes, [&](const ldap::attribute &a) { return a.type == type; });
 			if (!c.values.empty()) {
-				ldap::attribute_values a;
+				ldap::attribute a;
 				a.type = type;
 				for (auto v : c.values) {
 					a.values.emplace_back(v);
@@ -463,12 +463,12 @@ TEST_CASE("decode: a mapped attribute under a range option is incomplete", "[map
 	CAPTURE(range);
 	const bool plain_kept = GENERATE(true, false);
 	ldap::entry e = full_entry();
-	const ldap::attribute member_of{ "memberOf" };
+	const ldap::attribute_description member_of{ "memberOf" };
 	if (!plain_kept) {
-		std::erase_if(e.attributes, [&](const ldap::attribute_values &a) { return a.type == member_of; });
+		std::erase_if(e.attributes, [&](const ldap::attribute &a) { return a.type == member_of; });
 	}
-	ldap::attribute_values ranged;
-	ranged.type = ldap::attribute::unchecked(range);
+	ldap::attribute ranged;
+	ranged.type = ldap::attribute_description::unchecked(range);
 	ranged.values.emplace_back("cn=more,ou=groups,dc=example,dc=org");
 	e.attributes.push_back(std::move(ranged));
 	auto p = ldap::decode<person>(e);
@@ -483,8 +483,8 @@ TEST_CASE("decode: a range option on another attribute, or another option, is ig
 {
 	ldap::entry e = full_entry();
 	for (const char *other : { "member;range=0-1", "memberOf;lang-fr" }) {
-		ldap::attribute_values a;
-		a.type = ldap::attribute::unchecked(other);
+		ldap::attribute a;
+		a.type = ldap::attribute_description::unchecked(other);
 		a.values.emplace_back("x");
 		e.attributes.push_back(std::move(a));
 	}
@@ -508,8 +508,8 @@ TEST_CASE("decode: a member mapped with options reads them in any order", "[mapp
 TEST_CASE("a mapping error message names the code once", "[mapping][decode]")
 {
 	ldap::entry e = full_entry();
-	const ldap::attribute uid{ "uid" };
-	std::erase_if(e.attributes, [&](const ldap::attribute_values &a) { return a.type == uid; });
+	const ldap::attribute_description uid{ "uid" };
+	std::erase_if(e.attributes, [&](const ldap::attribute &a) { return a.type == uid; });
 	auto p = ldap::decode<person>(e);
 	REQUIRE_FALSE(p.has_value());
 	CHECK(std::string(p.error().message())
@@ -536,8 +536,8 @@ TEST_CASE("a conversion error leaves the value out and shows the DN sanitized", 
 	// The entry's DN (the server's text) too.
 	ldap::entry e = full_entry();
 	e.dn = "uid=x\n2026-01-01 forged,dc=example";
-	const ldap::attribute uid{ "uid" };
-	std::erase_if(e.attributes, [&](const ldap::attribute_values &a) { return a.type == uid; });
+	const ldap::attribute_description uid{ "uid" };
+	std::erase_if(e.attributes, [&](const ldap::attribute &a) { return a.type == uid; });
 	auto p = ldap::decode<person>(e);
 	REQUIRE_FALSE(p.has_value());
 	CHECK(std::string(p.error().context) == "entry uid=x" + fffd + "2026-01-01 forged,dc=example: attribute uid");

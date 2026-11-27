@@ -188,13 +188,16 @@ struct ava
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	attribute type{};
+	attribute_description type{};
 	std::pmr::string value{};
 	bool hex_form = false;
 
 	ava() = default;
 	explicit ava(const allocator_type &alloc) : type(alloc), value(alloc) {}
-	ava(const attribute &type_, std::string_view value_, bool hex_form_ = false, const allocator_type &alloc = {})
+	ava(const attribute_description &type_,
+	  std::string_view value_,
+	  bool hex_form_ = false,
+	  const allocator_type &alloc = {})
 	  : type(type_, alloc), value(value_, alloc), hex_form(hex_form_)
 	{}
 	ava(const ava &) = default;

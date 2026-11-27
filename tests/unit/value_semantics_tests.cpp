@@ -177,23 +177,22 @@ TEST_CASE("value semantics: message and controls", "[value_semantics][message]")
 	check_value_semantics(ldap::sort_result{ 16, "a-long-attribute-type-name" });
 }
 
-TEST_CASE("value semantics: entry and attribute_values", "[value_semantics][attribute]")
+TEST_CASE("value semantics: entry and attribute", "[value_semantics][attribute]")
 {
-	const ldap::attribute_values values(ldap::attribute("description"), { long_value, "another long value" });
+	const ldap::attribute values(ldap::attribute_description("description"), { long_value, "another long value" });
 	CHECK(values.type.text() == "description");
 	REQUIRE(values.values.size() == 2);
 	CHECK(values.values[1] == "another long value");
 	{
 		counting_resource arena;
-		const ldap::attribute_values on_arena(
-		  ldap::attribute("description"), { long_value }, ldap::attribute_values::allocator_type(&arena));
+		const ldap::attribute on_arena(
+		  ldap::attribute_description("description"), { long_value }, ldap::attribute::allocator_type(&arena));
 		CHECK(on_arena.get_allocator().resource() == &arena);
 		CHECK(on_arena.type.get_allocator().resource() == &arena);
 		CHECK(mr(on_arena.values.at(0)) == &arena);
 	}
-	check_value_semantics(values, [](const ldap::attribute_values &v) {
-		return resources{ v.type.get_allocator().resource(), mr(v.values.at(1)) };
-	});
+	check_value_semantics(values,
+	  [](const ldap::attribute &v) { return resources{ v.type.get_allocator().resource(), mr(v.values.at(1)) }; });
 
 	ldap::entry e;
 	e.dn = long_dn;
@@ -341,10 +340,10 @@ template<class T> void check_self_move(const T &sample)
 
 TEST_CASE("value semantics: ava and attribute", "[value_semantics][dn][attribute]")
 {
-	check_value_semantics(ldap::ava{ ldap::attribute{ "a-long-attribute-type-name" }, long_value },
+	check_value_semantics(ldap::ava{ ldap::attribute_description{ "a-long-attribute-type-name" }, long_value },
 	  [](const ldap::ava &x) { return resources{ x.type.get_allocator().resource(), mr(x.value) }; });
-	CHECK(ldap::attribute{}.empty());
-	CHECK_FALSE(ldap::attribute{ "cn" }.empty());
+	CHECK(ldap::attribute_description{}.empty());
+	CHECK_FALSE(ldap::attribute_description{ "cn" }.empty());
 }
 
 TEST_CASE("value semantics: filter self-move", "[value_semantics][filter]")

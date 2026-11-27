@@ -63,7 +63,7 @@ No raw strings for LDAP concepts. Each type validates when it is built.
 
 ```cpp
 ldap::dn        base{"ou=people,dc=example,dc=org"};  // literal: checked at compile time
-ldap::attribute mail{"mail"};                         // case-insensitive equality and hashing
+ldap::attribute_description mail{"mail"};                         // case-insensitive equality and hashing
 ldap::url       server{"ldaps://ldap.example.org"};    // server URL literal: checked at compile time
 auto            url = ldap::url::parse(user_text);     // result<url>
 
@@ -114,10 +114,10 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 - `rdn`: one (possibly multi-valued) RDN, with its own literal
   (`ldap::rdn{"uid=x"}`), `rdn::parse()` and `to_string()`; text holding more
   than one RDN is rejected.
-- `attribute`: attribute description, compared and hashed case-insensitively
+- `attribute_description`: attribute description, compared and hashed case-insensitively
   (the hash is seeded at random per process, so a server cannot send names
   that collide; its values differ between runs).
-  `attribute::parse()` is strict RFC 4512; `attribute::unchecked()` keeps names
+  `attribute_description::parse()` is strict RFC 4512; `attribute_description::unchecked()` keeps names
   as servers send them (Active Directory's `member;range=0-1499`).
 - `entry`: untyped search result (DN text + ordered attributes) with
   case-insensitive `find()`; duplicate attributes from the server are merged.
@@ -150,7 +150,7 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 - `bytes`: not implemented; wire values are `std::pmr::string` holding raw
   octets (see section 10).
 - Literals go through `consteval` helper types (`dn::literal`,
-  `rdn::literal`, `attribute::literal`, `url::literal`) that run the same
+  `rdn::literal`, `attribute_description::literal`, `url::literal`) that run the same
   scanner as `parse()` (for `url`, a constexpr scanner accepting a subset
   of `parse_server()`), so an invalid literal is a compile error. A runtime
   `const char*` does not compile there: runtime text must go through
@@ -1992,7 +1992,7 @@ escapes or Trojan Source reordering, or make every message huge. The fields
 keep the text exactly as sent. Server text the library quotes in a
 `context` (a value that failed to convert, an entry's DN, a SCRAM server
 error, a control type, an AddRequest attribute, the text
-`attribute::parse` rejected, the root DSE's subschemaSubentry, an
+`attribute_description::parse` rejected, the root DSE's subschemaSubentry, an
 attribute type's SYNTAX) gets the same treatment, cut at 64 or 256 bytes.
 So does the DN an operation names (`search <base>`, `modify <DN>`, ...)
 and a password modify's user: the caller's, but often a DN the server
@@ -3000,7 +3000,7 @@ lose the connection along with the error.
   allocator-aware (`allocator_type`, allocator-extended copy/move, assignment
   keeps the target's resource): the decoded message model (`message`, the
   responses, `ldap_result`, `control`, `partial_attribute`, the typed
-  response controls), `filter`, `dn`, `attribute`, `entry`, `url`,
+  response controls), `filter`, `dn`, `attribute_description`, `entry`, `url`,
   `ber::writer`. `error` is the deliberate exception (section 5), and so
   are the request operations (3jj.2): built once per operation and never
   bulk-decoded, they are plain values with `std::pmr` members on the default

@@ -323,7 +323,7 @@ namespace filters {
 
 	using kind = filter::kind;
 
-	attr::attr(const attribute &name, const allocator_type &alloc)
+	attr::attr(const attribute_description &name, const allocator_type &alloc)
 	  : name_(name.text(), alloc), valid_(detail::is_attribute_description(name_))
 	{}
 

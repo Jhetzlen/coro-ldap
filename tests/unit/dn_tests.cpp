@@ -26,7 +26,7 @@ auto parse(std::string_view text) -> ldap::dn
 
 auto single(const std::string &type, const std::string &value) -> ldap::rdn
 {
-	return ldap::rdn{ { ldap::ava{ ldap::attribute::unchecked(type), value } } };
+	return ldap::rdn{ { ldap::ava{ ldap::attribute_description::unchecked(type), value } } };
 }
 
 }// namespace
@@ -222,7 +222,7 @@ TEST_CASE("dn structure: rdns, parent, child, empty", "[dn]")
 
 	CHECK(d.child(ldap::rdn{}).error().code == ldap::client_errc::invalid_dn);
 	CHECK(d.child(single("bad type", "x")).error().code == ldap::client_errc::invalid_dn);
-	const auto empty_hex = d.child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, "", true } } });
+	const auto empty_hex = d.child(ldap::rdn{ { ldap::ava{ ldap::attribute_description{ "cn" }, "", true } } });
 	REQUIRE_FALSE(empty_hex);
 	CHECK(empty_hex.error().code == ldap::client_errc::invalid_dn);
 	CHECK(empty_hex.error().context == "dn::child: empty #hex value");
@@ -241,7 +241,7 @@ TEST_CASE("rdn literal constructor", "[dn][rdn]")
 {
 	const ldap::rdn uid{ "uid=jdoe" };
 	REQUIRE(uid.avas.size() == 1);
-	CHECK(uid.avas[0].type == ldap::attribute{ "uid" });
+	CHECK(uid.avas[0].type == ldap::attribute_description{ "uid" });
 	CHECK(uid.avas[0].value == "jdoe");
 	CHECK(uid == single("uid", "jdoe"));
 	CHECK(uid.to_string() == "uid=jdoe");
@@ -305,8 +305,8 @@ TEST_CASE("rdn to_string/parse round-trips arbitrary values", "[dn][rdn]")
 	}
 	for (std::size_t start = 0; start < all.size(); start += 7) {
 		const std::string value = " " + all.substr(start, 13) + " ";
-		const ldap::rdn r{ { ldap::ava{ ldap::attribute{ "cn" }, value },
-		  ldap::ava{ ldap::attribute{ "sn" }, value } } };
+		const ldap::rdn r{ { ldap::ava{ ldap::attribute_description{ "cn" }, value },
+		  ldap::ava{ ldap::attribute_description{ "sn" }, value } } };
 		const auto text = r.to_string();
 		INFO(text);
 		auto back = ldap::rdn::parse(text);
@@ -457,8 +457,8 @@ TEST_CASE("dn to_string/parse round-trips arbitrary values", "[dn]")
 	for (std::size_t start = 0; start < all.size(); start += 7) {
 		const std::string value = all.substr(start, 13) + " ";
 		const auto d = ldap::dn{ "dc=example" }
-						 .child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, value },
-						   ldap::ava{ ldap::attribute{ "2.5.4.4" }, " " + value } } })
+						 .child(ldap::rdn{ { ldap::ava{ ldap::attribute_description{ "cn" }, value },
+						   ldap::ava{ ldap::attribute_description{ "2.5.4.4" }, " " + value } } })
 						 .value();
 		const auto text = d.to_string();
 		INFO(text);

@@ -135,7 +135,7 @@ namespace detail {
 			if (!value) {
 				return std::unexpected(with_context(std::move(value.error()), std::string("attribute ") + name()));
 			}
-			return rdn{ ava{ attribute::unchecked(name()), *value } };
+			return rdn{ ava{ attribute_description::unchecked(name()), *value } };
 		}
 
 		[[nodiscard]] static auto dn_of(const dn &base, const key_type &key) -> result<dn>

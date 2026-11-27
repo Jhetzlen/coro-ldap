@@ -116,7 +116,7 @@ namespace {
 	void append_ava(rdn &r, const detail::dn_token &tok, std::pmr::memory_resource *mr)
 	{
 		auto &a = r.avas.emplace_back();// uses-allocator: on r's resource
-		a.type = attribute::unchecked(tok.type, mr);
+		a.type = attribute_description::unchecked(tok.type, mr);
 		a.value = unescape(tok, mr);
 		a.hex_form = tok.hex;
 	}

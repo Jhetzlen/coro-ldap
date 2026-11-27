@@ -7,7 +7,7 @@
 
 namespace jhetz::ldap {
 
-attribute_values::attribute_values(const attribute &type_,
+attribute::attribute(const attribute_description &type_,
   std::initializer_list<std::string_view> values_,
   const allocator_type &alloc)
   : type(type_, alloc), values(values_.begin(), values_.end(), alloc)
@@ -16,7 +16,7 @@ attribute_values::attribute_values(const attribute &type_,
 auto entry::find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *
 {
 	const bool has_options = type.contains(';');
-	const auto it = std::ranges::find_if(attributes, [&](const attribute_values &a) {
+	const auto it = std::ranges::find_if(attributes, [&](const attribute &a) {
 		return has_options ? detail::same_description(a.type.text(), type) : detail::iequals(a.type.text(), type);
 	});
 	return it == attributes.end() ? nullptr : &it->values;
@@ -37,7 +37,7 @@ auto entry::from(search_result_entry e) -> entry
 		const auto it = index.find(pa.type);
 		if (it == index.end()) {
 			auto &a = out.attributes.emplace_back();
-			a.type = attribute::unchecked(std::move(pa.type));
+			a.type = attribute_description::unchecked(std::move(pa.type));
 			a.values = std::move(pa.values);
 			index.emplace(std::string_view(a.type.text()), out.attributes.size() - 1);
 		} else {

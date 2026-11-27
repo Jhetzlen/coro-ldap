@@ -69,7 +69,7 @@ TEST_CASE("connection: search_entry and search_reference value semantics", "[net
 	const std::string_view long_value = "a value long enough to allocate";
 	ldap::entry e;
 	e.dn = "uid=a-user-with-a-long-name,ou=people,dc=example,dc=org";
-	e.attributes.push_back(ldap::attribute_values(ldap::attribute("description"), { long_value }));
+	e.attributes.push_back(ldap::attribute(ldap::attribute_description("description"), { long_value }));
 	check_value_semantics(ldap::search_entry{ e, { ldap::control{ "1.2.840.113556.1.4.319", true, long_value } } },
 	  [](const ldap::search_entry &x) { return resources{ mr(x.dn), mr(x.controls.at(0).value.value()) }; });
 	check_value_semantics(
@@ -578,7 +578,7 @@ TEST_CASE("connection: search items move with an allocator", "[net][connection][
 			ldap::search_entry e(&a);
 			e.dn = "uid=someone-with-a-long-name,ou=people,dc=example,dc=org";
 			e.attributes.emplace_back(
-			  ldap::attribute{ "description" }, std::initializer_list<std::string_view>{ long_value });
+			  ldap::attribute_description{ "description" }, std::initializer_list<std::string_view>{ long_value });
 			e.controls.emplace_back(long_oid, true, long_value);
 			return e;
 		};

@@ -152,7 +152,7 @@ struct substring_assertion
 // ---------------------------------------------------------------- DNs
 
 namespace detail {
-	using equality_rule_lookup = std::string_view (*)(const void *context, const attribute &type);
+	using equality_rule_lookup = std::string_view (*)(const void *context, const attribute_description &type);
 
 	// A per-type rule lookup returns text it does not own (string_view, char
 	// pointer, or a reference to a string that outlives the call).
@@ -164,8 +164,8 @@ namespace detail {
 
 	template<class F>
 	concept equality_rule_lookup_function =
-	  std::invocable<const F &, const attribute &>
-	  && is_borrowed_rule_name<std::invoke_result_t<const F &, const attribute &>>;
+	  std::invocable<const F &, const attribute_description &>
+	  && is_borrowed_rule_name<std::invoke_result_t<const F &, const attribute_description &>>;
 
 	[[nodiscard]] auto distinguished_name_match(const dn &attribute_value,
 	  const dn &assertion_value,
@@ -193,9 +193,11 @@ template<detail::equality_rule_lookup_function F>
 		F *const function = &equality_rule;
 		return distinguished_name_match(attribute_value, assertion_value, function);
 	} else {
-		const detail::equality_rule_lookup lookup = [](const void *context, const attribute &type) -> std::string_view {
+		const detail::equality_rule_lookup lookup = [](const void *context,
+													  const attribute_description &type) -> std::string_view {
 			const F &f = *static_cast<const F *>(context);
-			if constexpr (std::is_pointer_v<std::remove_cvref_t<std::invoke_result_t<const F &, const attribute &>>>) {
+			if constexpr (std::is_pointer_v<
+							std::remove_cvref_t<std::invoke_result_t<const F &, const attribute_description &>>>) {
 				const char *const rule = std::invoke(f, type);
 				return rule == nullptr ? std::string_view{} : std::string_view{ rule };
 			} else {

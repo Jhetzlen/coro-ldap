@@ -311,9 +311,9 @@ namespace filters {
 		using allocator_type = std::pmr::polymorphic_allocator<>;
 
 		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
-		attr(attribute::literal name, const allocator_type &alloc = {}) : name_(name.text, alloc) {}
+		attr(attribute_description::literal name, const allocator_type &alloc = {}) : name_(name.text, alloc) {}
 		// An invalid `name` makes every filter built from it a failed() one.
-		explicit attr(const attribute &name, const allocator_type &alloc = {});
+		explicit attr(const attribute_description &name, const allocator_type &alloc = {});
 
 		[[nodiscard]] auto operator==(std::string_view value) const -> filter;
 		[[nodiscard]] auto operator>=(std::string_view value) const -> filter;

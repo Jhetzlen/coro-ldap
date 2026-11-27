@@ -1376,7 +1376,7 @@ namespace {
 		const server_schema *schema;
 		std::size_t depth = 0;
 
-		[[nodiscard]] auto key_of(const attribute &type) const noexcept -> type_key
+		[[nodiscard]] auto key_of(const attribute_description &type) const noexcept -> type_key
 		{
 			const std::string_view name = type.text();
 			if (schema != nullptr) {
@@ -1479,7 +1479,7 @@ namespace {
 
 	// The equality rule the lookup gives `type`; null for a rule match() does
 	// not implement. The rule's text is read before the next lookup call.
-	auto rule_of(const attribute &type, const dn_context &ctx) -> const rule_entry *
+	auto rule_of(const attribute_description &type, const dn_context &ctx) -> const rule_entry *
 	{
 		const std::string_view rule = ctx.lookup(ctx.context, type);
 		return find_rule(rule.empty() ? std::string_view{ "caseIgnoreMatch" } : rule);
@@ -1918,14 +1918,17 @@ namespace detail {
 
 auto distinguished_name_match(const dn &attribute_value, const dn &assertion_value) -> match_result
 {
-	const detail::equality_rule_lookup lookup = [](const void *, const attribute &) -> std::string_view { return {}; };
+	const detail::equality_rule_lookup lookup = [](const void *, const attribute_description &) -> std::string_view {
+		return {};
+	};
 	return detail::distinguished_name_match(attribute_value, assertion_value, lookup, nullptr, nullptr);
 }
 
 auto distinguished_name_match(const dn &attribute_value, const dn &assertion_value, const server_schema &schema)
   -> match_result
 {
-	const detail::equality_rule_lookup lookup = [](const void *context, const attribute &type) -> std::string_view {
+	const detail::equality_rule_lookup lookup = [](const void *context,
+												  const attribute_description &type) -> std::string_view {
 		const auto &s = *static_cast<const server_schema *>(context);
 		const attribute_type *t = s.find_attribute(type.text());
 		if (t == nullptr) {

@@ -68,13 +68,13 @@ namespace {
 
 	struct answer
 	{
-		attribute_values *values = nullptr;
+		attribute *values = nullptr;
 		std::optional<ranged_description> ranged{};
 	};
 
 	struct returned
 	{
-		attribute_values *values = nullptr;
+		attribute *values = nullptr;
 		std::optional<ranged_description> ranged{};
 
 		[[nodiscard]] auto base() const -> std::string_view

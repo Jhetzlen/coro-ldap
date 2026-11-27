@@ -297,14 +297,15 @@ TEST_CASE("dn, attribute and entry allocate from the given resource", "[pmr][dn]
 	CHECK(d->rdns()[0].avas[1].type.get_allocator().resource() == &arena);
 	const auto parent = d->parent();
 	CHECK(parent.get_allocator().resource() == &arena);
-	const auto child = parent.child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, "x" } }, &arena }).value();
+	const auto child =
+	  parent.child(ldap::rdn{ { ldap::ava{ ldap::attribute_description{ "cn" }, "x" } }, &arena }).value();
 	CHECK(child.get_allocator().resource() == &arena);
 	CHECK(child.rdns()[0].avas[0].value.get_allocator().resource() == &arena);
 	CHECK(d->to_string(&arena).get_allocator().resource() == &arena);
 	const ldap::dn literal(ldap::dn::literal("dc=example,dc=org"), &arena);
 	CHECK(literal.rdns()[1].get_allocator().resource() == &arena);
 
-	auto attr = ldap::attribute::parse("userCertificate;binary-with-a-long-option", &arena);
+	auto attr = ldap::attribute_description::parse("userCertificate;binary-with-a-long-option", &arena);
 	REQUIRE(attr.has_value());
 	CHECK(attr->text().get_allocator().resource() == &arena);
 

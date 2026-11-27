@@ -207,13 +207,13 @@ TEST_CASE("filter builders make one-node trees with unescaped values", "[filter]
 	}
 	SECTION("attribute objects")
 	{
-		CHECK(text_of(attr(ldap::attribute{ "mail" }) == "x") == "(mail=x)");
-		const auto bad = attr(ldap::attribute::unchecked("uid=*)(cn")) == "x";
+		CHECK(text_of(attr(ldap::attribute_description{ "mail" }) == "x") == "(mail=x)");
+		const auto bad = attr(ldap::attribute_description::unchecked("uid=*)(cn")) == "x";
 		CHECK(bad.empty());
 		REQUIRE(bad.build_error().has_value());
 		CHECK(bad.build_error()->code == ldap::client_errc::invalid_attribute);
-		CHECK(
-		  attr(ldap::attribute::unchecked("")).present().build_error()->code == ldap::client_errc::invalid_attribute);
+		CHECK(attr(ldap::attribute_description::unchecked("")).present().build_error()->code
+			  == ldap::client_errc::invalid_attribute);
 	}
 	SECTION("empty filters")
 	{

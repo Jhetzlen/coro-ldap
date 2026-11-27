@@ -227,7 +227,7 @@ namespace detail {
 
 // An attribute description such as `cn` or `userCertificate;binary`;
 // compared case-insensitively, spelling kept.
-class attribute
+class attribute_description
 {
   public:
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -240,41 +240,45 @@ class attribute
 		{
 			if (!detail::is_attribute_description(s)) {
 				// NOLINTNEXTLINE(bugprone-std-exception-baseclass): consteval, fails compilation with this text
-				throw "ldap::attribute: invalid attribute description";
+				throw "ldap::attribute_description: invalid attribute description";
 			}
 		}
 		const char *text;
 	};
 
-	attribute() = default;
-	explicit attribute(const allocator_type &alloc) : name_(alloc) {}
-	explicit attribute(literal l, const allocator_type &alloc = {}) : name_(l.text, alloc) {}
-	attribute(const attribute &) = default;
-	attribute(attribute &&) noexcept = default;
-	attribute(const attribute &other, const allocator_type &alloc) : name_(other.name_, alloc) {}
-	attribute(attribute &&other, const allocator_type &alloc) : name_(std::move(other.name_), alloc) {}
-	auto operator=(const attribute &) -> attribute & = default;
-	auto operator=(attribute &&) -> attribute & = default;
-	~attribute() = default;
+	attribute_description() = default;
+	explicit attribute_description(const allocator_type &alloc) : name_(alloc) {}
+	explicit attribute_description(literal l, const allocator_type &alloc = {}) : name_(l.text, alloc) {}
+	attribute_description(const attribute_description &) = default;
+	attribute_description(attribute_description &&) noexcept = default;
+	attribute_description(const attribute_description &other, const allocator_type &alloc) : name_(other.name_, alloc)
+	{}
+	attribute_description(attribute_description &&other, const allocator_type &alloc)
+	  : name_(std::move(other.name_), alloc)
+	{}
+	auto operator=(const attribute_description &) -> attribute_description & = default;
+	auto operator=(attribute_description &&) -> attribute_description & = default;
+	~attribute_description() = default;
 
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return name_.get_allocator(); }
 
 	[[nodiscard]] static auto parse(std::string_view text,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<attribute>;
-	[[nodiscard]] static auto unchecked(std::string_view text, const allocator_type &alloc = {}) -> attribute
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<attribute_description>;
+	[[nodiscard]] static auto unchecked(std::string_view text, const allocator_type &alloc = {})
+	  -> attribute_description
 	{
-		attribute a(alloc);
+		attribute_description a(alloc);
 		a.name_.assign(text);
 		return a;
 	}
-	[[nodiscard]] static auto unchecked(const char *text, const allocator_type &alloc = {}) -> attribute
+	[[nodiscard]] static auto unchecked(const char *text, const allocator_type &alloc = {}) -> attribute_description
 	{
 		return unchecked(std::string_view(text), alloc);
 	}
 	// Takes the string, with its resource.
-	[[nodiscard]] static auto unchecked(std::pmr::string &&text) noexcept -> attribute
+	[[nodiscard]] static auto unchecked(std::pmr::string &&text) noexcept -> attribute_description
 	{
-		return attribute(std::move(text), adopt{});
+		return attribute_description(std::move(text), adopt{});
 	}
 
 	// The whole description as given: "cn;lang-de".
@@ -287,17 +291,18 @@ class attribute
 	}
 	[[nodiscard]] auto empty() const noexcept -> bool { return name_.empty(); }
 
-	friend auto operator==(const attribute &a, const attribute &b) noexcept -> bool
+	friend auto operator==(const attribute_description &a, const attribute_description &b) noexcept -> bool
 	{
 		return detail::iequals(a.name_, b.name_);
 	}
-	friend auto operator<=>(const attribute &a, const attribute &b) noexcept -> std::weak_ordering;
+	friend auto operator<=>(const attribute_description &a, const attribute_description &b) noexcept
+	  -> std::weak_ordering;
 
   private:
 	struct adopt
 	{
 	};
-	attribute(std::pmr::string &&name, adopt) noexcept : name_(std::move(name)) {}
+	attribute_description(std::pmr::string &&name, adopt) noexcept : name_(std::move(name)) {}
 
 	std::pmr::string name_{};
 };
@@ -332,9 +337,9 @@ namespace detail {
 
 }// namespace jhetz::ldap
 
-template<> struct std::hash<jhetz::ldap::attribute>
+template<> struct std::hash<jhetz::ldap::attribute_description>
 {
-	auto operator()(const jhetz::ldap::attribute &a) const noexcept -> std::size_t
+	auto operator()(const jhetz::ldap::attribute_description &a) const noexcept -> std::size_t
 	{
 		return jhetz::ldap::hash_value(a.text());
 	}

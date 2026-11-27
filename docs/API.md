@@ -169,7 +169,7 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   fails with that error instead of `invalid_filter`. A filter
   combined from others uses the left operand's memory resource. An
   attribute given to `filters::attr` that is not a valid description (only
-  possible with `attribute::unchecked`) makes every filter built from it a
+  possible with `attribute_description::unchecked`) makes every filter built from it a
   `failed()` one (`invalid_attribute`), and so does a bad extensible-match
   rule (`invalid_filter`).
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
@@ -225,17 +225,17 @@ The CMake target `jhetz::ldap_core` (no networking, ICU only).
   with caseIgnoreMatch for every attribute; `distinguished_name_match(a, b,
   schema)` uses each type's EQUALITY from a `server_schema` (inherited
   through SUP, caseIgnoreMatch when none); `distinguished_name_match(a, b,
-  lookup)` takes a callable on `const ldap::attribute &` returning a rule
+  lookup)` takes a callable on `const ldap::attribute_description &` returning a rule
   NAME or OID, or an empty string for caseIgnoreMatch, as a
   `std::string_view`, a `const char *` or a reference to a string (a
   `std::string` by value does not compile). Every overload treats a type's
   names and OID as one (the schema's, then RFC 4512's and RFC 4519's:
   `cn`, `commonName`, `2.5.4.3`); RDNs that differ only in a type name
   nothing resolves compare Undefined.
-- `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
+- `jhetz/ldap/attribute.hpp`: `ldap::attribute_description`, an attribute description with
   case-insensitive equality, ordering and `std::hash`; also
-  `attribute::parse(text)` (runtime text, `invalid_attribute`) and
-  `attribute::unchecked(text)` for names a server sent as they are (AD's
+  `attribute_description::parse(text)` (runtime text, `invalid_attribute`) and
+  `attribute_description::unchecked(text)` for names a server sent as they are (AD's
   `member;range=0-1499`). The hash is seeded per process: its values must
   not be stored or sent.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
@@ -1980,7 +1980,7 @@ Errors are values (`result<T>`); the exceptions left are these:
   propagates out of the call that ran it.
 - `result<T>::value()` on an error: `std::bad_expected_access`.
 
-The literal constructors (`dn`, `rdn`, `attribute`, `url`, the mapping
+The literal constructors (`dn`, `rdn`, `attribute_description`, `url`, the mapping
 descriptors) are consteval: an invalid literal does not compile.
 
 ## Memory
@@ -1990,7 +1990,7 @@ and are allocator-aware: the decoded part of the message model (`message`,
 every response operation, `ldap_result`, `control`, `partial_attribute`,
 the typed response controls such as `paged_results`, `sort_result`,
 `vlv_response` and `end_transaction_response`), `filter`,
-`dn` / `rdn` / `ava`, `attribute`, `entry` / `attribute_values`, `url` /
+`dn` / `rdn` / `ava`, `attribute_description`, `entry` / `attribute`, `url` /
 `url_extension` and `ber::writer` have `allocator_type`, `get_allocator()`,
 an allocator constructor, allocator-extended copy and move constructors, and
 assignment that keeps the target's resource (also for their `std::optional`
@@ -1998,7 +1998,7 @@ and `std::variant` members). The request operations (`bind_request`,
 `search_request`, `add_request`, ..., `attribute_value_assertion`,
 `modify_change`, `end_transaction_request`) are plain values on the default
 resource: they are built once per operation, never bulk-decoded. Parsing and decoding take the resource:
-`decode_options::memory`, `filter::parse(text, mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
+`decode_options::memory`, `filter::parse(text, mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute_description::parse(text, mr)`,
 `url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
 `read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.
 The defaults are the default resource, i.e. the heap, so nothing changes
