@@ -175,12 +175,9 @@ if(WIN32 AND BUILD_SHARED_LIBS AND PROJECT_IS_TOP_LEVEL AND NOT DEFINED CMAKE_RU
 endif()
 
 # ICU 60+ (U8_NEXT's maximal subparts): UTF-8, character properties,
-# LDAPprep and SASLprep. `data` for a static ICU.
-find_package(ICU 60 COMPONENTS uc data)
-if(NOT ICU_FOUND)
-    message(FATAL_ERROR "jhetz::ldap needs ICU 60+ (e.g. apt install libicu-dev; on Windows "
-        "vcpkg install icu and configure with -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake)")
-endif()
+# LDAPprep and SASLprep (`data` for a static ICU); OpenSSL for Corosio's
+# TLS. Installed, or built with a pinned vcpkg.
+include(cmake/jhetz_ldap_deps.cmake)
 
 add_library(jhetz_ldap_core
     src/ad/controls.cpp
@@ -255,8 +252,8 @@ if(JHETZ_LDAP_BUILD_NET)
         endif()
     endforeach()
     if(NOT TARGET Boost::corosio_openssl)
-        message(FATAL_ERROR "jhetz::ldap needs OpenSSL (e.g. apt install libssl-dev; on Windows "
-            "vcpkg install openssl with the vcpkg toolchain file), or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
+        message(FATAL_ERROR "jhetz::ldap: Corosio was built without OpenSSL (Boost::corosio_openssl); "
+            "an installed boost_corosio package must have it")
     endif()
     add_library(jhetz_ldap
         src/connection/connection.cpp
@@ -309,16 +306,23 @@ if(JHETZ_LDAP_BUILD_NET)
             set_source_files_properties(src/sasl_gssapi_sspi.cpp PROPERTIES COMPILE_DEFINITIONS SECURITY_WIN32)
             target_link_libraries(jhetz_ldap PRIVATE secur32)
         else()
-            find_package(PkgConfig)
-            if(PkgConfig_FOUND)
-                pkg_search_module(JHETZ_LDAP_GSSAPI IMPORTED_TARGET krb5-gssapi heimdal-gssapi)
-            endif()
-            if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
-                message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs the GSS-API library and pkg-config "
-                    "(e.g. apt install libkrb5-dev pkg-config), or configure with -DJHETZ_LDAP_WITH_GSSAPI=OFF")
+            # Conan's krb5 package (CMakeDeps), else pkg-config.
+            find_package(krb5 CONFIG QUIET)
+            if(TARGET krb5::mit-krb5-gssapi)
+                set(jhetz_ldap_gssapi_target krb5::mit-krb5-gssapi)
+            else()
+                find_package(PkgConfig)
+                if(PkgConfig_FOUND)
+                    pkg_search_module(JHETZ_LDAP_GSSAPI IMPORTED_TARGET krb5-gssapi heimdal-gssapi)
+                endif()
+                if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
+                    message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs the GSS-API library and pkg-config "
+                        "(e.g. apt install libkrb5-dev pkg-config), or configure with -DJHETZ_LDAP_WITH_GSSAPI=OFF")
+                endif()
+                set(jhetz_ldap_gssapi_target PkgConfig::JHETZ_LDAP_GSSAPI)
             endif()
             target_sources(jhetz_ldap PRIVATE src/sasl_gssapi_gss.cpp)
-            target_link_libraries(jhetz_ldap PRIVATE PkgConfig::JHETZ_LDAP_GSSAPI)
+            target_link_libraries(jhetz_ldap PRIVATE ${jhetz_ldap_gssapi_target})
         endif()
     endif()
 elseif(JHETZ_LDAP_WITH_GSSAPI)

@@ -24,6 +24,14 @@ package matches only the same minor version (`find_package(jhetz_ldap 0.3)`,
 
 ### Added
 
+- ICU and OpenSSL that are not installed are built once with a pinned vcpkg in the build tree, as static libraries (`JHETZ_LDAP_FETCH_DEPS`, on by default; Linux and MSVC), so a FetchContent or CPM build needs nothing installed.
+- README: a CPM.cmake snippet.
+
+### Changed
+
+- The vcpkg `gssapi` feature uses vcpkg's `krb5` port on Linux, and the Conan `gssapi` option ConanCenter's `krb5` recipe, instead of the system GSS-API library.
+- The vcpkg port and the Conan recipes are in the form microsoft/vcpkg and conan-center-index accept (no local-source hook in the portfile, no system packages, `url` set to conan-center-index); they are not submitted.
+
 - `tls_options::cert_pem` and `key_pem`: the TLS client certificate (then its chain) and its unencrypted key as PEM text, instead of `cert_file` and `key_file`.
 
 ### Fixed

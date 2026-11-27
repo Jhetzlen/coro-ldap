@@ -5,9 +5,7 @@ from conan.errors import ConanInvalidConfiguration
 from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import copy, get, rmdir
-from conan.tools.gnu import PkgConfig
 from conan.tools.scm import Version
-from conan.tools.system.package_manager import Apt, Dnf, PacMan, Yum, Zypper
 
 required_conan_version = ">=2.28"
 
@@ -17,7 +15,7 @@ class JhetzLdapConan(ConanFile):
     description = "C++23 LDAP client library: the LDAP codec, and an async connection on Corosio/Capy coroutines."
     license = "BSL-1.0"
     homepage = "https://github.com/Jhetzlen/coro-ldap"
-    url = "https://github.com/Jhetzlen/coro-ldap"
+    url = "https://github.com/conan-io/conan-center-index"
     topics = ("ldap", "coroutines", "asn1", "tls", "sasl")
     package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
@@ -61,6 +59,9 @@ class JhetzLdapConan(ConanFile):
             self.requires("corosio/cci.20261120", transitive_headers=True, transitive_libs=True)
             self.requires("capy/cci.20261119", transitive_headers=True, transitive_libs=True)
             self.requires("openssl/[>=3 <4]")
+            # On Windows SSPI, part of the OS.
+            if self.options.gssapi and self.settings.os != "Windows":
+                self.requires("krb5/[>=1.21 <2]")
 
     def validate(self):
         check_min_cppstd(self, 23)
@@ -75,16 +76,6 @@ class JhetzLdapConan(ConanFile):
                 if self.dependencies[dep].options.shared != self.options.shared:
                     raise ConanInvalidConfiguration(f"{self.ref} and {dep} must be both static or both shared")
 
-    def system_requirements(self):
-        # On Windows, SSPI is part of the OS.
-        if not self.options.get_safe("gssapi") or self.settings.os == "Windows":
-            return
-        Apt(self).install(["libkrb5-dev", "pkg-config"])
-        Dnf(self).install(["krb5-devel", "pkgconf"])
-        Yum(self).install(["krb5-devel", "pkgconf"])
-        Zypper(self).install(["krb5-devel", "pkg-config"])
-        PacMan(self).install(["krb5", "pkgconf"])
-
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
@@ -98,6 +89,7 @@ class JhetzLdapConan(ConanFile):
         tc.cache_variables["JHETZ_LDAP_BUILD_FUZZERS"] = False
         tc.cache_variables["JHETZ_LDAP_BUILD_BENCH"] = False
         tc.cache_variables["JHETZ_LDAP_WERROR"] = False
+        tc.cache_variables["JHETZ_LDAP_FETCH_DEPS"] = False
         tc.cache_variables["FETCHCONTENT_FULLY_DISCONNECTED"] = True
         tc.cache_variables["CMAKE_CXX_SCAN_FOR_MODULES"] = False
         tc.generate()
@@ -113,23 +105,6 @@ class JhetzLdapConan(ConanFile):
         cmake = CMake(self)
         cmake.install()
         rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
-
-    def _gssapi_libs(self, component):
-        if self.settings.os == "Windows":
-            component.system_libs.append("secur32")
-            return
-        for module in ("krb5-gssapi", "heimdal-gssapi"):
-            try:
-                pc = PkgConfig(self, module)
-                pc.libs  # noqa: B018 (raises if the module is missing)
-            except Exception:
-                continue
-            component.system_libs.extend(pc.libs)
-            component.libdirs.extend(d for d in pc.libdirs if d not in component.libdirs)
-            component.sharedlinkflags.extend(pc.linkflags)
-            component.exelinkflags.extend(pc.linkflags)
-            return
-        raise ConanInvalidConfiguration("jhetz-ldap gssapi needs the system GSS-API library (pkg-config krb5-gssapi)")
 
     def package_info(self):
         self.cpp_info.set_property("cmake_file_name", "jhetz_ldap")
@@ -152,7 +127,10 @@ class JhetzLdapConan(ConanFile):
         if self.settings.os == "Windows":
             net.system_libs = ["crypt32"]
         if self.options.get_safe("gssapi"):
-            self._gssapi_libs(net)
+            if self.settings.os == "Windows":
+                net.system_libs.append("secur32")
+            else:
+                net.requires.append("krb5::mit-krb5-gssapi")
 
         ad = self.cpp_info.components["ldap_ad"]
         ad.set_property("cmake_target_name", "jhetz::ldap_ad")

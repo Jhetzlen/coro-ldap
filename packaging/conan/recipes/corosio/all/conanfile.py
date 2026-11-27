@@ -22,7 +22,7 @@ class CorosioConan(ConanFile):
     description = "Boost.Corosio: coroutine-first networking on Capy, with OpenSSL TLS streams."
     license = "BSL-1.0"
     homepage = "https://github.com/cppalliance/corosio"
-    url = "https://github.com/Jhetzlen/coro-ldap"
+    url = "https://github.com/conan-io/conan-center-index"
     topics = ("coroutines", "networking", "tls")
     package_type = "library"
     settings = "os", "arch", "compiler", "build_type"

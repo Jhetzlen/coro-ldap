@@ -13,7 +13,7 @@ class CapyConan(ConanFile):
     description = "Boost.Capy: coroutine primitives for asynchronous I/O (C++20)."
     license = "BSL-1.0"
     homepage = "https://github.com/cppalliance/capy"
-    url = "https://github.com/Jhetzlen/coro-ldap"
+    url = "https://github.com/conan-io/conan-center-index"
     topics = ("coroutines", "async", "io")
     package_type = "library"
     settings = "os", "arch", "compiler", "build_type"

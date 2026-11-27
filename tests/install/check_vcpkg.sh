@@ -3,7 +3,7 @@
 # in packaging/vcpkg/ports, jhetz-ldap taken from this source tree, and runs it
 # (docs/DEVELOPMENT.md "vcpkg"):
 #   tests/install/check_vcpkg.sh WORK_DIR [TRIPLET [gssapi]]
-# With gssapi the consumer uses jhetz-ldap[gssapi] (the system GSS-API).
+# With gssapi the consumer uses jhetz-ldap[gssapi] (vcpkg's krb5 on Linux).
 # Runs on Linux and, under Git Bash with the MSVC environment, on Windows.
 # The vcpkg is build/tools/vcpkg (JHETZ_LDAP_VCPKG overrides it, VCPKG_ROOT
 # is ignored); the binary cache and the downloads default to
@@ -46,9 +46,10 @@ tree=$(cd "$root" && {
 	git ls-files --others --exclude-standard | xargs -r cat
 } | sha256sum | cut -d' ' -f1)
 portfile="$work/ports/jhetz-ldap/portfile.cmake"
+# The tree replaces the port's vcpkg_from_github() download.
 {
-	echo "set(JHETZ_LDAP_SOURCE_PATH \"$root\") # tree $tree"
-	cat "$root/packaging/vcpkg/ports/jhetz-ldap/portfile.cmake"
+	echo "set(SOURCE_PATH \"$root\") # tree $tree"
+	sed '/^vcpkg_from_github(/,/^)/d' "$root/packaging/vcpkg/ports/jhetz-ldap/portfile.cmake"
 } >"$portfile"
 # The port's version is the tree's.
 sed -i -e "s/^  \"version\": \".*\",/  \"version\": \"$version\",/" -e '/^  "port-version":/d' \

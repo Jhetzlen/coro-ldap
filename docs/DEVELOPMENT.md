@@ -60,12 +60,72 @@ and they include the shared internal headers of `src/`.
 | `JHETZ_LDAP_BUILD_EXAMPLES` | `ON` (`OFF` as a subproject) | the programs in `examples/` (see [Examples](#examples)); need `JHETZ_LDAP_BUILD_NET` |
 | `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap`, `jhetz::ldap_ad` (Active Directory, DESIGN.md section 12) and their tests; fetches Corosio + Capy, needs OpenSSL |
 | `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
+| `JHETZ_LDAP_FETCH_DEPS` | `ON` | ICU and OpenSSL, when not installed, built with a pinned vcpkg in the build tree (see [Dependencies](#dependencies)); the vcpkg port and the Conan recipe turn it off |
+| `JHETZ_LDAP_VCPKG_ROOT` | empty | an existing vcpkg for `JHETZ_LDAP_FETCH_DEPS` instead of the pinned clone |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. `/WX` on MSVC; off on clang-cl, not built yet (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 | `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
 | `BUILD_SHARED_LIBS` | `OFF` | CMake's own: shared `jhetz_ldap_core`, `jhetz_ldap` and `jhetz_ldap_ad`, and fetched Capy and Corosio (see [Shared libraries](#shared-libraries)) |
+
+### Dependencies
+
+`cmake/jhetz_ldap_deps.cmake` finds ICU, and OpenSSL with
+`JHETZ_LDAP_BUILD_NET`. It uses the installed ones first: the system's, a
+vcpkg or Conan toolchain's, or those that `CMAKE_PREFIX_PATH`, `ICU_ROOT` or
+`OPENSSL_ROOT_DIR` point at. If one is missing and `JHETZ_LDAP_FETCH_DEPS` is
+on (the default), it clones the vcpkg commit pinned there (the same one as
+`.github/vcpkg/vcpkg.json`), shallow, into `<build>/_deps/jhetz_ldap_vcpkg`,
+bootstraps it, and runs `vcpkg install --classic` for the missing ones only
+(an installed OpenSSL stays in use next to a built ICU), into that
+directory. Then it finds them there, with pkg-config reading only that
+prefix for OpenSSL. This is what a FetchContent or CPM consumer without ICU
+or OpenSSL gets, with nothing else to do:
+
+- The libraries are static on both platforms, so there are no DLLs or
+  shared objects to deploy. On Linux they are release-only (an overlay
+  triplet `jhetz-ldap-<arch>-linux`). On Windows they use
+  `<arch>-windows-static-md` with both configurations, so Debug (`/MDd`)
+  and Release (`/MD`) each link their own. A build that sets
+  `_ITERATOR_DEBUG_LEVEL` in `CMAKE_CXX_FLAGS` (or `CXXFLAGS`) or
+  `CMAKE_CXX_FLAGS_DEBUG`, as CI's `=0`, gets an overlay triplet
+  (`jhetz-ldap-<arch>-windows-static-md-idl<N>`) that builds them with the
+  same value, since MSVC refuses to link static C++ libraries built with
+  another one (LNK2038). ICU then gets
+  `U_STATIC_IMPLEMENTATION` on Windows, and libdl and the threads library on
+  Linux. RelWithDebInfo and MinSizeRel link the release libraries.
+- The first configure takes 10 to 30 minutes, which is ICU and OpenSSL
+  building. A later configure of the same build tree finds them again at
+  once, and a new build tree is fast too: vcpkg's binary cache
+  (`~/.cache/vcpkg/archives`, `%LOCALAPPDATA%cpkgrchives`) serves the
+  built packages. `JHETZ_LDAP_VCPKG_ROOT` uses an existing vcpkg instead of
+  the clone.
+- It needs git, and what vcpkg needs to build them. On Linux that is curl,
+  zip, unzip, tar, pkg-config, make, autoconf, autoconf-archive, automake
+  and libtool (Debian: `apt install curl zip unzip tar pkg-config make
+  autoconf autoconf-archive automake libtool`). A machine that can install
+  those can usually install `libicu-dev libssl-dev` instead. On Windows it
+  needs Visual Studio's C++ tools, which an MSVC build already has.
+- It works on Linux and with MSVC (x64, arm64), and not when cross
+  compiling or on MinGW. Under a vcpkg toolchain it is never used: a missing
+  ICU or OpenSSL there belongs in the consumer's `vcpkg.json`. vcpkg's
+  metrics are off (`-disableMetrics`, `VCPKG_DISABLE_METRICS`).
+- `-DJHETZ_LDAP_FETCH_DEPS=OFF` restores the plain error. The vcpkg port
+  and the Conan recipe pass it, since a package manager supplies the
+  dependencies itself.
+- Installing (`JHETZ_LDAP_INSTALL`) from such a build is not supported: the
+  installed package config looks ICU and OpenSSL up again on the consumer's
+  side, and it would not find them in the build tree. Install packages from
+  installed dependencies, or use the vcpkg port or the Conan recipe.
+
+GSSAPI's library (`JHETZ_LDAP_WITH_GSSAPI` off Windows) is not built this
+way: it is the system's, or vcpkg's or Conan's `krb5` under their toolchains.
+
+To try the fallback on a machine that has ICU and OpenSSL, hide them from
+CMake: on Debian `-DCMAKE_IGNORE_PREFIX_PATH="/usr;/usr/local"
+-DCMAKE_IGNORE_PATH="/usr/include;/usr/lib/x86_64-linux-gnu;/usr/lib"` in a
+new build tree.
 
 ### Shared libraries
 
@@ -448,7 +508,7 @@ installed `jhetz_ldap-config-version.cmake` is generated from it with
 5. Push, then set the registry `baseline` in the README's vcpkg snippet (and
    in `packaging/vcpkg/vcpkg-configuration.example.json`) to the pushed
    commit that has the new `versions/` entries, and the Conan and
-   FetchContent snippets' version and tag.
+   FetchContent and CPM snippets' version and tag.
 
 When the Capy or Corosio pins in `CMakeLists.txt` move, update their vcpkg
 ports and Conan recipes (a new version in `config.yml`, `url` and `sha256`
@@ -465,12 +525,13 @@ declare `"supports": "!(osx | ios | uwp | android | emscripten | mingw)"`.
 `jhetz-ldap` has the features `net` (`jhetz::ldap` and `jhetz::ldap_ad`; `ad` is not a
 feature of its own, it is built with `net`), a default feature, and `gssapi`
 (needs `net`). `jhetz-ldap[core]` is the codec only
-(`jhetz::ldap_core`, `COMPONENTS core`). ICU and OpenSSL come from vcpkg.
-`gssapi` uses the system GSS-API library (MIT krb5 or Heimdal), found with
-the system pkg-config as in a normal build, so the OS package must be
-installed: Debian `libkrb5-dev pkg-config`, Fedora
-`krb5-devel pkgconf`, Arch `krb5 pkgconf`. On Windows it is SSPI
-(`secur32`), with nothing to install and no pkg-config. Corosio's port disables
+(`jhetz::ldap_core`, `COMPONENTS core`). ICU and OpenSSL come from vcpkg
+(the port passes `JHETZ_LDAP_FETCH_DEPS=OFF`). `gssapi` uses vcpkg's `krb5`
+port on Linux, found with pkg-config as in a normal build, so pkg-config
+must be installed (Debian `pkg-config`, Fedora and Arch `pkgconf`). On
+Windows it is SSPI (`secur32`), with nothing to install and no pkg-config.
+The portfile has nothing but the upstream tarball (no local-source hook),
+as microsoft/vcpkg requires of its ports. Corosio's port disables
 WolfSSL and liburing (the epoll backend). In a manifest:
 
 ```json
@@ -486,7 +547,7 @@ and configure with `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cm
 builds `tests/install/vcpkg_consumer` (the `consumer/main.cpp` of the
 install check) against the ports, with `jhetz-ldap` built from this source
 tree instead of the release tarball: it copies the ports into `WORK_DIR` and
-sets `JHETZ_LDAP_SOURCE_PATH` in the copied portfile and the copied
+replaces the copied portfile's `vcpkg_from_github()` with `SOURCE_PATH`, and sets the copied
 `vcpkg.json`'s `"version"` to the tree's `project()` version (dropping
 `"port-version"`), so the port never disagrees with the tree before the
 release's port update. It uses the vcpkg in
@@ -556,9 +617,11 @@ names (`find_package(boost_capy / boost_corosio CONFIG)`, `Boost::capy`,
 release tarball with `FETCHCONTENT_FULLY_DISCONNECTED=ON`, so Capy and
 Corosio come from Conan; its options are `net` (default `True`:
 `jhetz::ldap` and `jhetz::ldap_ad`; `False` is `jhetz::ldap_core` alone) and
-`gssapi` (default `False`; the system GSS-API through pkg-config, as in the
-vcpkg port; on Windows SSPI's `secur32`, without system requirements or
-pkg-config), plus `shared` and `fPIC`. `shared` is propagated to `capy`
+`gssapi` (default `False`; ConanCenter's `krb5`, whose
+`krb5::mit-krb5-gssapi` target the build links instead of pkg-config's; on
+Windows SSPI's `secur32`), plus `shared` and `fPIC`. The recipes need no
+system packages and download nothing at build time (`JHETZ_LDAP_FETCH_DEPS`
+off), and their `url` is conan-center-index's, as ConanCenter requires. `shared` is propagated to `capy`
 and `corosio` (both have `shared` and `fPIC`, and define
 `BOOST_*_DYN_LINK` when shared), and a mismatch is refused; as for vcpkg,
 shared builds start with 0.2.0 (the 0.1.0 tarball builds static libraries
@@ -586,6 +649,28 @@ A consumer adds a clone as a remote
 (`conan remote add coro-ldap <clone>/packaging/conan --type=local-recipes-index`)
 and requires `jhetz-ldap/0.2.0`; recipes come from the clone's working tree,
 so `git pull` it for a new release.
+
+## Official registries
+
+The ports and recipes are kept in the form microsoft/vcpkg and
+conan-center-index accept, but are not submitted there. What a submission
+would add:
+
+- **vcpkg**: copy `packaging/vcpkg/ports/{capy,corosio,jhetz-ldap}` into
+  `ports/`, run `vcpkg format-manifest` on them and `vcpkg x-add-version
+  --all`, and open one pull request per port, `capy` first: each depends on
+  the one before. The ports already download only upstream tarballs,
+  depend on vcpkg's own `icu`, `openssl` and `krb5`, and turn off our
+  downloads. Corosio's `capy-imported.cmake` (a `CMAKE_PROJECT_INCLUDE`)
+  is a workaround that reviewers may ask to have as a patch, or fixed in
+  Corosio.
+- **ConanCenter**: copy `packaging/conan/recipes/{capy,corosio,jhetz-ldap}`
+  into conan-center-index's `recipes/`, one pull request each, in the same
+  order. The recipes need no system packages, take `krb5`, `icu` and
+  `openssl` from ConanCenter, and set `url` to conan-center-index.
+- Afterwards, the README's install snippets shrink to
+  `"dependencies": ["jhetz-ldap"]` and `jhetz-ldap/<version>` with no
+  registry or remote to add.
 
 ## Examples
 

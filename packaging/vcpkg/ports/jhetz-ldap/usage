@@ -8,8 +8,7 @@ jhetz-ldap provides CMake targets:
     find_package(jhetz_ldap CONFIG REQUIRED COMPONENTS core)
     target_link_libraries(main PRIVATE jhetz::ldap_core)
 
-    # with the feature "gssapi": on Windows SSPI, nothing to install;
-    # elsewhere the system GSS-API library and pkg-config must be installed
-    # (Debian: libkrb5-dev pkg-config, Fedora: krb5-devel pkgconf, Arch:
-    # krb5 pkgconf)
+    # with the feature "gssapi": on Windows SSPI; elsewhere vcpkg's krb5,
+    # found with pkg-config, which must be installed (Debian: pkg-config,
+    # Fedora and Arch: pkgconf)
     find_package(jhetz_ldap CONFIG REQUIRED COMPONENTS net gssapi)

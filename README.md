@@ -95,14 +95,19 @@ results) is in [`examples/`](examples/), one small program per task.
 |---|---|---|
 | [Corosio](https://github.com/cppalliance/corosio) | Async sockets, timers, DNS, and the `io_context` the client runs on | fetched by CMake |
 | [Capy](https://github.com/cppalliance/capy) | The coroutine `task` type, executors and strands | fetched by CMake |
-| OpenSSL | TLS for `ldaps://` and StartTLS (through Corosio), and the hashing for SASL SCRAM and NTLM | install it |
-| ICU 60+ | UTF-8 handling and Unicode string preparation (RFC 4518, SASLprep) | install it |
+| OpenSSL | TLS for `ldaps://` and StartTLS (through Corosio), and the hashing for SASL SCRAM and NTLM | the installed one, else built by CMake with a pinned vcpkg |
+| ICU 60+ | UTF-8 handling and Unicode string preparation (RFC 4518, SASLprep) | the installed one, else built by CMake with a pinned vcpkg |
 | GSS-API from the OS: MIT krb5 or Heimdal (optional); SSPI on Windows | SASL GSSAPI / Kerberos, with `-DJHETZ_LDAP_WITH_GSSAPI=ON` (pkg-config `krb5-gssapi` or `heimdal-gssapi`); on Windows SSPI (`secur32`), on by default | install it; Windows: built in |
 | Catch2 | Tests only | fetched by CMake |
 
-Debian: `apt install libicu-dev libssl-dev`, plus `libkrb5-dev pkg-config` for
-GSSAPI (Fedora `krb5-devel`, Arch `krb5`). The vcpkg `gssapi` feature and the
-Conan `gssapi` option use that system library too. On Windows GSSAPI is
+Installing ICU and OpenSSL makes the first configure fast (Debian: `apt
+install libicu-dev libssl-dev`). Without them, CMake builds both once, as
+static libraries, with a vcpkg it clones into the build tree. That takes
+10 to 30 minutes the first time, and then comes from vcpkg's cache
+([Dependencies](docs/DEVELOPMENT.md#dependencies);
+`-DJHETZ_LDAP_FETCH_DEPS=OFF` turns it off). GSSAPI needs `libkrb5-dev
+pkg-config` (Fedora `krb5-devel`, Arch `krb5`); the vcpkg `gssapi` feature
+and the Conan `gssapi` option bring their own `krb5`. On Windows GSSAPI is
 SSPI's Kerberos, part of the OS, and binds as the logged-on user by
 default.
 
@@ -166,7 +171,15 @@ find_package(jhetz_ldap 0.3 REQUIRED)
 target_link_libraries(app PRIVATE jhetz::ldap)  # or jhetz::ldap_core, jhetz::ldap_ad
 ```
 
-**CMake FetchContent** (or `add_subdirectory`), which fetches Capy and Corosio:
+**CPM.cmake**, which fetches Capy and Corosio, and builds ICU and OpenSSL if
+they are not installed:
+
+```cmake
+CPMAddPackage("gh:Jhetzlen/coro-ldap@0.2.0")
+target_link_libraries(app PRIVATE jhetz::ldap)
+```
+
+**CMake FetchContent** (or `add_subdirectory`), the same without CPM:
 
 ```cmake
 include(FetchContent)
