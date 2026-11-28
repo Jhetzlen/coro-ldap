@@ -7,6 +7,12 @@ package matches only the same minor version (`find_package(jhetz_ldap 0.3)`,
 
 ## Unreleased
 
+## 0.3.1 (2026-11-28)
+
+### Fixed
+
+- SASL NTLM without a security layer (every NTLM bind over `ldaps://` or StartTLS) sets NTLMSSP_NEGOTIATE_ALWAYS_SIGN in the NEGOTIATE and AUTHENTICATE messages, as Windows clients do; Active Directory refused these binds with `AcceptSecurityContext error, data 57`.
+
 ## 0.3.0 (2026-11-27)
 
 ### Breaking
