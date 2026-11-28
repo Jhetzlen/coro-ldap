@@ -1,7 +1,7 @@
 # jhetz::ldap - C++23 LDAP client library. Building: docs/DEVELOPMENT.md.
 cmake_minimum_required(VERSION 3.25)
 
-project(jhetz_ldap VERSION 0.3.0 LANGUAGES CXX)
+project(jhetz_ldap VERSION 0.3.1 LANGUAGES CXX)
 
 option(JHETZ_LDAP_BUILD_TESTS "Build the jhetz::ldap unit tests" ${PROJECT_IS_TOP_LEVEL})
 option(JHETZ_LDAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang only)" OFF)
