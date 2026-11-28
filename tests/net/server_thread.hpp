@@ -20,8 +20,12 @@
 
 namespace jhetz::ldap::test {
 
-// Answers bind (49 for "wrong"), search (two entries), add, modify, delete,
-// who am I, until the client leaves; ignores abandons.
+// The entries a search under ou=large,... returns.
+inline constexpr int large_search_entries = 3000;
+
+// Answers bind (49 for "wrong"), search (two entries, or large_search_entries
+// under ou=large,...), add, modify, delete, who am I, until the client leaves;
+// ignores abandons.
 inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy::task<void>
 {
 	net::read_buffer buf;
@@ -37,8 +41,16 @@ inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy:
 			out = bytes_of(bind_resp(r->id, pw != nullptr && pw->password == "wrong" ? 49 : 0));
 		} else if (const auto *s = std::get_if<ldap::search_request>(&r->op)) {
 			const std::string base(s->base_object);
-			out = bytes_of(entry_msg_for(*s, r->id, "uid=x," + base, "X"))
-				  + bytes_of(entry_msg_for(*s, r->id, "uid=y," + base, "Y")) + bytes_of(done_msg(r->id));
+			if (base.starts_with("ou=large,")) {
+				// Enough entries for a stack that grew with each one to overflow.
+				for (int i = 0; i < large_search_entries; ++i) {
+					out += bytes_of(entry_msg_for(*s, r->id, "uid=u" + std::to_string(i) + "," + base, "U"));
+				}
+				out += bytes_of(done_msg(r->id));
+			} else {
+				out = bytes_of(entry_msg_for(*s, r->id, "uid=x," + base, "X"))
+					  + bytes_of(entry_msg_for(*s, r->id, "uid=y," + base, "Y")) + bytes_of(done_msg(r->id));
+			}
 		} else if (std::holds_alternative<ldap::add_request>(r->op)) {
 			out = bytes_of(ldap::message{ r->id, ldap::add_response{ ldap::ldap_result{ 0 } } });
 		} else if (std::holds_alternative<ldap::modify_request>(r->op)) {

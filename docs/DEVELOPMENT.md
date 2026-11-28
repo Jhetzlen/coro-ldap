@@ -6,8 +6,8 @@ Building, testing and fuzzing jhetz::ldap. The basics are in the
 ## Build and test
 
 Linux is the tested platform. Windows (MSVC, clang-cl, MinGW-w64) is
-ported in the code but has not been built or tested by us yet: see
-[Windows](#windows). macOS is not supported (configure rejects Apple Clang,
+ported in the code; MSVC builds and runs the tests in CI and locally, while
+clang-cl and MinGW have not been built: see [Windows](#windows). macOS is not supported (configure rejects Apple Clang,
 even for the codec-only target). Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+;
 Clang needs libstdc++ 16+ too, so install g++-16 next to it; configure
 stops with an error on anything older; libc++ is neither supported nor
@@ -186,9 +186,14 @@ every ctest test but the `integration` label (no slapd, Samba or KDC on
 Windows; the tests that need the DNS fixtures or Linux interfaces skip).
 Each of the two jobs then runs `tests/install/check_vcpkg.sh` on
 `x64-windows-static` or `x64-windows`.
-Locally, the Linux setup still has no Windows toolchain and checks the
-port by syntax checks against the mingw-w64 headers. clang-cl and MinGW
-have not been built.
+Locally, MSVC builds and tests on a Windows machine too: Visual Studio
+2022 (17.14, MSVC 19.44) with its bundled vcpkg, configured with
+`-DCMAKE_TOOLCHAIN_FILE=<VS>\VC\vcpkg\scripts\buildsystems\vcpkg.cmake`
+and `-DVCPKG_TARGET_TRIPLET=x64-windows` from an x64 developer shell
+(`vcvars64.bat`), with Ninja. Set `CXXFLAGS=/D_ITERATOR_DEBUG_LEVEL=0`
+before the first Debug configure to match CI (see the tests below). On
+Linux, the port is checked by the syntax check against the mingw-w64
+headers below. clang-cl and MinGW have not been built.
 
 The CI job pins vcpkg (`.github/vcpkg/vcpkg.json`'s `builtin-baseline`;
 the runner's vcpkg is not used), builds ICU and OpenSSL release-only

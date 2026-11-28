@@ -292,6 +292,27 @@ TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it re
 	CHECK(c.search({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }).has_value());
 }
 
+// GitHub issue #2: the stack must not grow with the number of entries (it did
+// in MSVC Debug builds, where symmetric transfer is not a tail call).
+TEST_CASE("sync: a search with thousands of entries", "[net][sync]")
+{
+	server_thread srv;
+	auto opened =
+	  ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(30), .allow_cleartext_passwords = true });
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
+	const ldap::search_params large{ .base = ldap::dn{ "ou=large,dc=example,dc=org" }, .attributes = { "1.1" } };
+	auto r = c.search(large);
+	REQUIRE(r.has_value());
+	CHECK(r->entries.size() == large_search_entries);
+	auto via_run = ldap::sync::run(c, [&](ldap::connection &k) { return k.search(large); });
+	REQUIRE(via_run.has_value());
+	CHECK(via_run->entries.size() == large_search_entries);
+	auto paged = ldap::sync::search_paged(c, large, 500);// the server sends them all in one page
+	REQUIRE(paged.has_value());
+	CHECK(paged->entries.size() == large_search_entries);
+}
+
 TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]")
 {
 	{

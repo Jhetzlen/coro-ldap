@@ -100,7 +100,7 @@ The `bd prime` memories have the details. In short:
 - Text handling is full UTF-8 everywhere. Never ship an ASCII-only restriction; implement the RFC preparation instead.
 - ICU is the Unicode dependency.
 - Don't use `std::optional<T&>`; lookups return pointers (null means not found).
-- Linux is the tested platform. Windows is CI-verified for the build and unit tests (`.github/workflows/windows.yml`: MSVC 19.52 Debug, vcpkg ICU/OpenSSL). There is no local Windows toolchain: keep `_WIN32` branches compiling, check them locally with a mingw-w64 syntax check, let Windows CI confirm, and see docs/DEVELOPMENT.md "Windows". No macOS.
+- Linux is the tested platform. Windows is CI-verified for the build and unit tests (`.github/workflows/windows.yml`: MSVC 19.52 Debug, vcpkg ICU/OpenSSL). There is also a local Windows machine with Visual Studio 2022 (MSVC 19.44) and its bundled vcpkg: build and test `_WIN32` changes there with MSVC (from an x64 developer shell, `vcvars64.bat`), e.g. in `build/win` (Debug) or `build/win-rel` (RelWithDebInfo). A Debug build left at `_ITERATOR_DEBUG_LEVEL=2` fails the allocation-counting tests; configure with `CXXFLAGS=/D_ITERATOR_DEBUG_LEVEL=0` as CI does to match it. From Linux, the mingw-w64 syntax check still works. See docs/DEVELOPMENT.md "Windows". No macOS.
 - `examples/` holds bare one-action files of about 15-30 lines, with no helpers.
 - Format with `/usr/bin/clang-format` (v23).
 - Don't touch CI (`.github/workflows`, `gh run`) unless asked.
