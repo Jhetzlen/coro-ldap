@@ -142,7 +142,7 @@ linkage, which the build and the packages see to.
   "default-registry": { "kind": "git", "repository": "https://github.com/microsoft/vcpkg",
                         "baseline": "432d982fb917e1d9b032197b01572b83bcb02a75" },
   "registries": [ { "kind": "git", "repository": "https://github.com/Jhetzlen/coro-ldap",
-                    "baseline": "c2e04287c17ed4da38029553d147aae192df2812",
+                    "baseline": "38d1592b1497bedbb203576f6504cef697e1b8eb",
                     "packages": [ "jhetz-ldap", "capy", "corosio" ] } ]
 }
 ```
@@ -155,7 +155,7 @@ git clone https://github.com/Jhetzlen/coro-ldap
 conan remote add coro-ldap ./coro-ldap/packaging/conan --type=local-recipes-index
 ```
 
-and `jhetz-ldap/0.2.0` under `[requires]` in your `conanfile.txt` (with the
+and `jhetz-ldap/0.3.1` under `[requires]` in your `conanfile.txt` (with the
 `CMakeDeps` and `CMakeToolchain` generators). The library needs C++23, which
 `conan profile detect` does not select, so pass it (or set `compiler.cppstd=23`
 in your profile):
@@ -175,7 +175,7 @@ target_link_libraries(app PRIVATE jhetz::ldap)  # or jhetz::ldap_core, jhetz::ld
 they are not installed:
 
 ```cmake
-CPMAddPackage("gh:Jhetzlen/coro-ldap@0.2.0")
+CPMAddPackage("gh:Jhetzlen/coro-ldap@0.3.1")
 target_link_libraries(app PRIVATE jhetz::ldap)
 ```
 
@@ -183,7 +183,7 @@ target_link_libraries(app PRIVATE jhetz::ldap)
 
 ```cmake
 include(FetchContent)
-FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG v0.2.0)
+FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG v0.3.1)
 FetchContent_MakeAvailable(coro_ldap)
 target_link_libraries(app PRIVATE jhetz::ldap)
 ```

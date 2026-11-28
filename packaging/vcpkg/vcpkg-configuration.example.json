@@ -8,7 +8,7 @@
     {
       "kind": "git",
       "repository": "https://github.com/Jhetzlen/coro-ldap",
-      "baseline": "c2e04287c17ed4da38029553d147aae192df2812",
+      "baseline": "38d1592b1497bedbb203576f6504cef697e1b8eb",
       "packages": [
         "capy",
         "corosio",
