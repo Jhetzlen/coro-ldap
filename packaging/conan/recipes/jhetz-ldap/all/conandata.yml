@@ -5,3 +5,9 @@ sources:
   "0.2.0":
     url: "https://github.com/Jhetzlen/coro-ldap/archive/refs/tags/v0.2.0.tar.gz"
     sha256: "5bff9f9a0647e78a1c923ae00a8e3155cfca8147c263fa8f1bf9c776f4df3b7b"
+  "0.3.0":
+    url: "https://github.com/Jhetzlen/coro-ldap/archive/refs/tags/v0.3.0.tar.gz"
+    sha256: "21c5479b37126f795d2949e0edfd4e56d8d737e2be17456de4afab5b5a9a211e"
+  "0.3.1":
+    url: "https://github.com/Jhetzlen/coro-ldap/archive/refs/tags/v0.3.1.tar.gz"
+    sha256: "2c061e87f5bdf1ded7f959ce864ab633ab179ee20167df7cd29d5b34bebc92f4"
