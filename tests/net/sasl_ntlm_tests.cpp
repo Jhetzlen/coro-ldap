@@ -290,7 +290,8 @@ TEST_CASE("ntlm: ALWAYS_SIGN without a security layer, as Active Directory needs
 	const auto hash = cert_hash();
 	const ldap::sasl_bind_context tls{ .host = "dc1.example.org",
 		.tls = true,
-		.bindings = { .tls_server_end_point = hash, .default_type = ldap::channel_binding_type::tls_server_end_point } };
+		.bindings = {
+		  .tls_server_end_point = hash, .default_type = ldap::channel_binding_type::tls_server_end_point } };
 	constexpr std::uint32_t layer_bits =
 	  detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_seal | detail::ntlmssp_negotiate_key_exch;
 	const auto exchange = [&](std::uint32_t server_flags) {
@@ -300,10 +301,10 @@ TEST_CASE("ntlm: ALWAYS_SIGN without a security layer, as Active Directory needs
 		REQUIRE(first.has_value());
 		REQUIRE(first->has_value());
 		const std::string negotiate = **first;
-		const std::uint32_t negotiate_flags = static_cast<unsigned char>(negotiate[12])
-											  | static_cast<unsigned char>(negotiate[13]) << 8U
-											  | static_cast<unsigned char>(negotiate[14]) << 16U
-											  | static_cast<std::uint32_t>(static_cast<unsigned char>(negotiate[15])) << 24U;
+		const auto byte_at = [&](std::size_t i) {
+			return static_cast<std::uint32_t>(static_cast<unsigned char>(negotiate[i]));
+		};
+		const std::uint32_t negotiate_flags = byte_at(12) | byte_at(13) << 8U | byte_at(14) << 16U | byte_at(15) << 24U;
 		CHECK((negotiate_flags & detail::ntlmssp_negotiate_always_sign) != 0);
 		CHECK((negotiate_flags & layer_bits) == 0);
 		const std::string challenge = dc_challenge(server_flags);
