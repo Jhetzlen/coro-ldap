@@ -942,10 +942,29 @@ auto connection::core::make_stream(search_stream::state *s) noexcept -> ldap::se
 
 // ---------------------------------------------------------------- waiting
 
+namespace {
+
+	auto no_op() -> capy::task<void> { co_return; }
+
+	// A task completing without suspending resumes its awaiter by symmetric
+	// transfer, which MSVC does not make a tail call without optimization:
+	// each such co_await leaves frames on the stack until something suspends.
+	// A loop over messages already queued (a large search result) would grow
+	// it by each message (GitHub issue #2). So every this many in a row,
+	// next_response goes through a post, which unwinds the stack.
+	constexpr std::uint32_t max_without_suspending = 16;
+
+}// namespace
+
 auto connection::core::next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)
   -> capy::task<result<message>>
 {
+	if (!p.queue.empty() && ++p.without_suspending >= max_without_suspending) {
+		p.without_suspending = 0;
+		co_await capy::run(executor())(no_op());// resumes this coroutine with a post
+	}
 	while (p.queue.empty() && !p.finished) {
+		p.without_suspending = 0;
 		p.ready.clear();
 		std::error_code ec;
 		if (deadline) {

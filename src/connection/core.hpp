@@ -148,6 +148,8 @@ namespace detail {
 		// Why the request failed without a response to queue.
 		std::optional<error> failure{};
 		boost::capy::async_event ready{};// set while queue is non-empty or finished
+		// Messages next_response returned in a row without suspending (see there).
+		std::uint32_t without_suspending = 0;
 	};
 
 }// namespace detail
