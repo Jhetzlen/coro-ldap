@@ -130,7 +130,7 @@ new build tree.
 ### Shared libraries
 
 `-DBUILD_SHARED_LIBS=ON` builds `jhetz_ldap_core`, `jhetz_ldap` and
-`jhetz_ldap_ad` as shared libraries (`libjhetz_ldap.so.0.3.1`, SONAME
+`jhetz_ldap_ad` as shared libraries (`libjhetz_ldap.so.0.3.2`, SONAME
 `libjhetz_ldap.so.0.3`, since a 0.x minor version may break the ABI; DLLs
 on Windows); without it they are static. Both are tested, in CI too. Our
 libraries are always position-independent, and so are the fetched Capy and

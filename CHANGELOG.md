@@ -7,6 +7,12 @@ package matches only the same minor version (`find_package(jhetz_ldap 0.3)`,
 
 ## Unreleased
 
+## 0.3.2 (2026-11-28)
+
+### Fixed
+
+- A search with more than a few hundred entries no longer overflows the stack in MSVC Debug builds (`STATUS_STACK_OVERFLOW`), with `sync::connection::search`, `sync::run` or `sync::search_paged`, or a loop over `search_stream::next()`. Without optimization MSVC does not turn symmetric transfer into a tail call, so each entry already received added frames; the connection now resumes through a post every 16 such messages (#2).
+
 ## 0.3.1 (2026-11-28)
 
 ### Fixed
