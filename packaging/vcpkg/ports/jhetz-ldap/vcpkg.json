@@ -1,6 +1,6 @@
 {
   "name": "jhetz-ldap",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "C++23 LDAP client library: the LDAP codec, and an async connection on Corosio/Capy coroutines.",
   "homepage": "https://github.com/Jhetzlen/coro-ldap",
   "license": "BSL-1.0",
