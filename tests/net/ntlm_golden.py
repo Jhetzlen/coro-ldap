@@ -129,7 +129,9 @@ server_time = 0x01DB2B3C4D5E6F70
 cert_hash = bytes(range(32))
 
 # ---- NEGOTIATE_MESSAGE (2.2.1.1): no domain nor workstation, a zero Version.
-client_flags = UNICODE | REQUEST_TARGET | NTLM | ESS | TARGET_INFO | VERSION | F128
+# ALWAYS_SIGN without a layer, as Windows sends it: a DC refuses none of SIGN,
+# SEAL and ALWAYS_SIGN (AcceptSecurityContext error, data 57).
+client_flags = UNICODE | REQUEST_TARGET | NTLM | ALWAYS_SIGN | ESS | TARGET_INFO | VERSION | F128
 negotiate = b"NTLMSSP\0" + struct.pack("<II", 1, client_flags) + fields(0, 40) + fields(0, 40) + version(0, 0, 0)
 
 # ---- CHALLENGE_MESSAGE (2.2.1.2) of a domain controller.
@@ -168,7 +170,7 @@ exported_session_key = session_base_key  # no NTLMSSP_NEGOTIATE_KEY_EXCH
 # and MIC), then the payload in the library's order: DomainName, UserName,
 # Workstation, LmChallengeResponse, NtChallengeResponse,
 # EncryptedRandomSessionKey.
-auth_flags = (client_flags & dc_flags) | VERSION
+auth_flags = (client_flags & dc_flags) | VERSION | ALWAYS_SIGN
 payload = [u16(domain), u16(user), u16(workstation), lm_response, nt_response, b""]
 offsets = []
 at = 88

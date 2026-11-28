@@ -49,15 +49,18 @@ namespace {
 	constexpr std::size_t seq_num_size = 4;
 
 	// NEGOTIATE_MESSAGE flags (MS-NLMP section 2.2.2.5) without a security
-	// layer.
+	// layer. NTLMSSP_NEGOTIATE_ALWAYS_SIGN (flag M) asks for no layer, only
+	// dummy signatures, and Windows clients always set it: an Active
+	// Directory DC refuses an AUTHENTICATE_MESSAGE with none of SIGN, SEAL
+	// and ALWAYS_SIGN with AcceptSecurityContext error, data 57
+	// (ERROR_INVALID_PARAMETER), which is every bind over TLS without it.
 	constexpr std::uint32_t client_flags =
 	  detail::ntlmssp_negotiate_unicode | detail::ntlmssp_request_target | detail::ntlmssp_negotiate_ntlm
-	  | detail::ntlmssp_negotiate_extended_sessionsecurity | detail::ntlmssp_negotiate_target_info
-	  | detail::ntlmssp_negotiate_version | detail::ntlmssp_negotiate_128;
+	  | detail::ntlmssp_negotiate_always_sign | detail::ntlmssp_negotiate_extended_sessionsecurity
+	  | detail::ntlmssp_negotiate_target_info | detail::ntlmssp_negotiate_version | detail::ntlmssp_negotiate_128;
 
 	// What a security layer adds (MS-NLMP section 3.4).
-	constexpr std::uint32_t signing_flags =
-	  detail::ntlmssp_negotiate_always_sign | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch;
+	constexpr std::uint32_t signing_flags = detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch;
 
 	auto requested_flags(sasl_protection layer) -> std::uint32_t
 	{
@@ -617,8 +620,10 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 		.user_name = user_,
 		.workstation = workstation_,
 		.encrypted_random_session_key = std::move(encrypted_random_session_key),
-		// The flags both sides set, and the Version this message carries.
-		.negotiate_flags = (flags & c.negotiate_flags) | detail::ntlmssp_negotiate_version,
+		// The flags both sides set, and the Version this message carries;
+		// ALWAYS_SIGN even when the server did not echo it (see client_flags).
+		.negotiate_flags =
+		  (flags & c.negotiate_flags) | detail::ntlmssp_negotiate_version | detail::ntlmssp_negotiate_always_sign,
 		.version = client_version,
 		.mic = {},
 	};

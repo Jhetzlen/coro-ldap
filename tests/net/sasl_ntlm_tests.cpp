@@ -140,10 +140,10 @@ auto dc_challenge(std::uint32_t flags = dc_flags, bool with_timestamp = true) ->
 	  .version = detail::ntlm_version{ .product_major_version = 10, .product_build = 20348 } });
 }
 
-// The NEGOTIATE_MESSAGE: flags 0x22880205, a zero Version with
+// The NEGOTIATE_MESSAGE: flags 0x22888205 (ALWAYS_SIGN), a zero Version with
 // NTLMSSP_REVISION_W2K3.
 const std::string expected_negotiate =
-  str("4e544c4d53535000 01000000 05028822 0000000028000000 0000000028000000 000000000000000f");
+  str("4e544c4d53535000 01000000 05828822 0000000028000000 0000000028000000 000000000000000f");
 
 auto sasl_resp(std::int32_t id, std::int32_t code, std::optional<std::string_view> creds = {}) -> ldap::message
 {
@@ -267,6 +267,63 @@ TEST_CASE("ntlm: the channel bindings hash", "[sasl][ntlm]")
 	auto cb = detail::ntlm_channel_bindings_hash(app);
 	REQUIRE(cb.has_value());
 	CHECK(hex(*cb) == expected_bindings_hash);
+	// A SHA-384 certificate's 48-octet hash (00 01 .. 2F): the length 69
+	// before it, as impacket and Windows flatten the struct; Python's
+	// hashlib: md5(Z(16) || pack("<I", 69) || "tls-server-end-point:" || h).
+	std::vector<std::byte> h384;
+	for (unsigned i = 0; i < 48; ++i) {
+		h384.push_back(static_cast<std::byte>(i));
+	}
+	auto cb384 = detail::ntlm_channel_bindings_hash(
+	  ldap::prefixed_channel_binding(ldap::channel_binding_type::tls_server_end_point, h384));
+	REQUIRE(cb384.has_value());
+	CHECK(hex(*cb384) == "97 98 7E 63 5E 87 10 FE 8E B4 E5 6A 60 A0 B6 21");
+}
+
+TEST_CASE("ntlm: ALWAYS_SIGN without a security layer, as Active Directory needs over TLS", "[sasl][ntlm]")
+{
+	// A DC answers an AUTHENTICATE_MESSAGE with none of SIGN, SEAL and
+	// ALWAYS_SIGN with "AcceptSecurityContext error, data 57"
+	// (ERROR_INVALID_PARAMETER): every NTLM bind over ldaps:// or StartTLS
+	// failed so. Windows clients always set ALWAYS_SIGN, which asks for no
+	// layer (MS-NLMP section 2.2.2.5 flag M).
+	const auto hash = cert_hash();
+	const ldap::sasl_bind_context tls{ .host = "dc1.example.org",
+		.tls = true,
+		.bindings = {
+		  .tls_server_end_point = hash, .default_type = ldap::channel_binding_type::tls_server_end_point } };
+	constexpr std::uint32_t layer_bits =
+	  detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_seal | detail::ntlmssp_negotiate_key_exch;
+	const auto exchange = [&](std::uint32_t server_flags) {
+		auto mech = detail::ntlm_test_access::with_challenge("CORP\\jdoe", "secret", {}, spec_client_challenge);
+		mech.prepare(tls);
+		auto first = mech.start();
+		REQUIRE(first.has_value());
+		REQUIRE(first->has_value());
+		const std::string negotiate = **first;
+		const auto byte_at = [&](std::size_t i) {
+			return static_cast<std::uint32_t>(static_cast<unsigned char>(negotiate[i]));
+		};
+		const std::uint32_t negotiate_flags = byte_at(12) | byte_at(13) << 8U | byte_at(14) << 16U | byte_at(15) << 24U;
+		CHECK((negotiate_flags & detail::ntlmssp_negotiate_always_sign) != 0);
+		CHECK((negotiate_flags & layer_bits) == 0);
+		const std::string challenge = dc_challenge(server_flags);
+		auto second = mech.step(challenge);
+		REQUIRE(second.has_value());
+		REQUIRE(second->has_value());
+		auto auth = ldap::testing::parse_ntlm_authenticate(**second);
+		REQUIRE(auth.has_value());
+		CHECK((auth->negotiate_flags & detail::ntlmssp_negotiate_always_sign) != 0);
+		CHECK((auth->negotiate_flags & layer_bits) == 0);
+		CHECK(auth->encrypted_random_session_key.empty());
+		// Still a valid NTProofStr and MIC with the flags changed.
+		dc_verify(negotiate, challenge, **second, "secret", "jdoe", "CORP");
+	};
+	SECTION("the server echoes ALWAYS_SIGN") { exchange(dc_flags); }
+	SECTION("the server does not echo it: the AUTHENTICATE_MESSAGE still sets it")
+	{
+		exchange(dc_flags & ~detail::ntlmssp_negotiate_always_sign);
+	}
 }
 
 TEST_CASE("ntlm: an NTLMv2 bind checked by the server", "[net][sasl][ntlm]")
@@ -293,8 +350,9 @@ TEST_CASE("ntlm: an NTLMv2 bind checked by the server", "[net][sasl][ntlm]")
 	CHECK(auth->workstation == u16("WS01"));
 	CHECK(auth->encrypted_random_session_key.empty());
 	CHECK(auth->lm_challenge_response == std::string(24, '\0'));
-	// The flags both sides set, no signing, sealing nor key exchange.
-	CHECK(auth->negotiate_flags == 0x2288'0205u);
+	// The flags both sides set with ALWAYS_SIGN, no signing, sealing nor key
+	// exchange.
+	CHECK(auth->negotiate_flags == 0x2288'8205u);
 	CHECK(auth->version == detail::ntlm_version{});
 
 	const std::string info = dc_verify(negotiate, challenge, authenticate, password, "j\xC3\xB6rg", "EXAMPLE");
@@ -418,14 +476,14 @@ TEST_CASE("ntlm: a golden AUTHENTICATE_MESSAGE from an independent implementatio
 	// script copies the library's free choices (flags, AV_PAIR and payload
 	// order, the domain split), so the vector does not check those.
 	const std::string negotiate =
-	  str("4e544c4d53535000010000000502882200000000280000000000000028000000000000000000000f");
+	  str("4e544c4d53535000010000000582882200000000280000000000000028000000000000000000000f");
 	const std::string challenge = str(
 	  "4e544c4d53535000020000000e000e0038000000058289a20123456789abcdef00000000000000003000300046000000"
 	  "0a007c4f0000000f4500580041004d0050004c00450002000c0044006f006d00610069006e0001000c00530065007200"
 	  "76006500720007000800706f5e4d3c2bdb0100000000");
 	const std::string authenticate = str(
 	  "4e544c4d53535000030000001800180070000000a800a800880000000800080058000000080008006000000008000800"
-	  "68000000000000003001000005028822000000000000000f3431f2819f9924d547cca6a5d7d8da4f43004f0052005000"
+	  "68000000000000003001000005828822000000000000000fb9c092c30d377470605979fcbd12a83643004f0052005000"
 	  "6a00f60072006700570053003000310000000000000000000000000000000000000000000000000081e0a00d437f04e2"
 	  "9c8c6c576fe4a3460101000000000000706f5e4d3c2bdb01aaaaaaaaaaaaaaaa0000000002000c0044006f006d006100"
 	  "69006e0001000c0053006500720076006500720007000800706f5e4d3c2bdb0106000400020000000a0010008f1214c9"
